@@ -134,35 +134,12 @@ def _skill_links_need_reinstall(root: Path, revision: str, home: Path) -> bool:
 
 
 def _candidate_verification(checkout: Path) -> dict[str, Any]:
-    tool = checkout / "tools" / "wuditask.py"
     tests = checkout / "tests"
-    if not tool.is_file() or not tests.is_dir():
+    if not (checkout / "tools" / "wuditask.py").is_file() or not tests.is_dir():
         raise WudiTaskError(
             "selfupdate_candidate_invalid",
             "The candidate does not contain the WudiTask CLI and test suite.",
             details={"checkout": str(checkout)},
-            exit_code=4,
-        )
-    validate = _run(
-        [
-            sys.executable,
-            str(tool),
-            "--local",
-            "--json",
-            "validate",
-        ],
-        cwd=checkout,
-        allowed=None,
-    )
-    if validate.returncode != 0:
-        raise WudiTaskError(
-            "selfupdate_candidate_failed",
-            "Candidate task data validation failed; the installed clone was not changed.",
-            details={
-                "step": "validate",
-                "stdout": validate.stdout.strip(),
-                "stderr": validate.stderr.strip(),
-            },
             exit_code=4,
         )
     test = _run(
@@ -190,7 +167,6 @@ def _candidate_verification(checkout: Path) -> dict[str, Any]:
         )
     summary_lines = (test.stderr or test.stdout).strip().splitlines()
     return {
-        "validate": "passed",
         "tests": "passed",
         "test_summary": summary_lines[-1] if summary_lines else "passed",
     }

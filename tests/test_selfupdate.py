@@ -87,8 +87,8 @@ class SelfUpdateTests(unittest.TestCase):
 
         self.assertEqual("updated", result["status"])
         self.assertEqual("2", (self.client / "VERSION").read_text().strip())
-        self.assertEqual("passed", result["verification"]["validate"])
         self.assertEqual("passed", result["verification"]["tests"])
+        self.assertNotIn("validate", result["verification"])
         self.assertFalse(result["reinstall_required"])
 
         current = self.update()
