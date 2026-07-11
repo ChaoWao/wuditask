@@ -40,7 +40,7 @@ def spec(
 
 def make_repository(root: Path) -> TaskRepository:
     repository = TaskRepository(root)
-    repository.ensure_layout()
+    repository.initialize()
     return repository
 
 
@@ -69,3 +69,24 @@ def git(command: list[str], cwd: Path) -> subprocess.CompletedProcess[str]:
         capture_output=True,
         text=True,
     )
+
+
+def make_hub_origin(
+    base: Path,
+    *,
+    name: str = "hub",
+    branch: str = "main",
+) -> Path:
+    origin = base / f"{name}.git"
+    git(["init", "--bare", f"--initial-branch={branch}", str(origin)], base)
+    seed = base / f"{name}-seed"
+    seed.mkdir()
+    git(["init", "-b", branch], seed)
+    git(["config", "user.name", "seed"], seed)
+    git(["config", "user.email", "seed@example.invalid"], seed)
+    make_repository(seed)
+    git(["add", "hub.json", "data"], seed)
+    git(["commit", "-m", "initialize task hub"], seed)
+    git(["remote", "add", "origin", str(origin)], seed)
+    git(["push", "-u", "origin", branch], seed)
+    return origin

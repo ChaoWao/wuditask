@@ -53,6 +53,7 @@ class SkillTests(unittest.TestCase):
             self.assertNotIn("TODO", skill_text)
             self.assertIn("$wuditask", metadata)
             self.assertIn(f"${name}", metadata)
+            self.assertNotIn("hub_path", skill_text)
 
     def test_relative_skill_references_resolve(self) -> None:
         for name in sorted(EXPECTED_SKILLS):
@@ -97,6 +98,14 @@ class SkillTests(unittest.TestCase):
         )
         self.assertIn("~/.wuditask/worktrees/<slug>", selfupdate)
         self.assertIn("reinstall_required=true", selfupdate)
+        self.assertIn("tool_remote", selfupdate)
+        self.assertIn("hub_remote", selfupdate)
+
+        install = (SKILLS_ROOT / "wuditask-install" / "SKILL.md").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("--hub-remote", install)
+        self.assertIn("tool_path", install)
 
 
 if __name__ == "__main__":

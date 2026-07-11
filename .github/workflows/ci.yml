@@ -1,0 +1,26 @@
+name: WudiTask Tool CI
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out tool repository
+        uses: actions/checkout@v6
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - name: Run tool tests
+        run: python3 -m unittest discover -s tests -v
+      - name: Check CLI help
+        run: python3 tools/wuditask.py --json help

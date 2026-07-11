@@ -9,16 +9,16 @@ Use only the registered WudiTask CLI's read-only `list` command.
 
 ## Locate the CLI
 
-Read `~/.wuditask/config.json`, take its absolute `hub_path`, and invoke `python3 <hub_path>/tools/wuditask.py --json ...`. If registration is missing or stale, ask the user to invoke `$wuditask-install` or `/wuditask-install`.
+Read `~/.wuditask/config.json`, take its absolute `tool_path`, and invoke `python3 <tool_path>/tools/wuditask.py --json ...`. The CLI reads the task Hub remote and branch from the same config. If registration is missing or stale, ask the user to invoke `$wuditask-install` or `/wuditask-install`.
 
 ## List tasks
 
 Choose the scope requested by the user:
 
 ```bash
-python3 <hub_path>/tools/wuditask.py --json list --scope open
-python3 <hub_path>/tools/wuditask.py --json list --scope archive
-python3 <hub_path>/tools/wuditask.py --json list --scope all --repo owner/name
+python3 <tool_path>/tools/wuditask.py --json list --scope open
+python3 <tool_path>/tools/wuditask.py --json list --scope archive
+python3 <tool_path>/tools/wuditask.py --json list --scope all --repo owner/name
 ```
 
 Summarize only the fields relevant to the question. Preserve task IDs, repositories, ownership, priority, derived state, completion outcome, and canonical links exactly.

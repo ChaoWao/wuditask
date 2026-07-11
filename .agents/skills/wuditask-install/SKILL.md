@@ -1,30 +1,33 @@
 ---
 name: wuditask-install
-description: Register the complete WudiTask skill suite and CLI symlinks for Codex and Claude from a cloned WudiTask repository. Use when a user asks to install, set up, register, relocate, repair, or reconcile WudiTask access, or when any WudiTask skill reports missing or stale configuration or links.
+description: Register the complete WudiTask skill suite and CLI symlinks from a cloned tool repository, together with a separate task Hub remote. Use when a user asks to install, set up, register, relocate, repair, or reconcile WudiTask access, or when any WudiTask skill reports missing or stale configuration or links.
 ---
 
 # Install WudiTask
 
-Register this clone by running its own Python installer. Do not pip/npm install anything and do not copy skill files manually.
+Register the tool clone by running its own Python installer. Do not pip/npm install anything and do not copy skill files manually.
 
-## Resolve the clone
+## Resolve the tool and Hub
 
 1. Prefer the current Git repository root when it contains `tools/wuditask.py` and `.agents/skills/`.
 2. Otherwise resolve this SKILL.md's real path and walk upward to the directory containing `tools/wuditask.py`.
 3. For repair after a move, use the new clone path supplied by the user.
 4. Refuse a directory that lacks the tool, lacks a required WudiTask skill, or contains an unexpected skill.
+5. Obtain the task Hub Git remote and branch. The Hub must be a separate repository containing a compatible `hub.json`; do not use the tool repository remote as the Hub.
 
 ## Register
 
 Run:
 
 ```bash
-python3 HUB/tools/wuditask.py --hub HUB --json install
+python3 TOOL/tools/wuditask.py --json install \
+  --hub-remote https://github.com/OWNER/wuditask-hub.git \
+  --hub-branch main
 ```
 
 Confirm the JSON reports:
 
-- `~/.wuditask/config.json` with the absolute hub path;
+- `~/.wuditask/config.json` schema v2 with `tool_path`, `tool_remote`, `tool_branch`, `hub_remote`, and `hub_branch`;
 - the complete reported skill suite linked under both `~/.agents/skills` and `~/.claude/skills`;
 - `~/.local/bin/wuditask` linked to the repository's Python entry point.
 
@@ -34,10 +37,10 @@ If `launcher_on_path` is false, mention the launcher path; agents can still call
 
 If installation returns `install_path_exists`, inspect and tell the user which destination conflicts. Do not use `--replace` until the user explicitly approves. When approved, rerun with `--replace`; the installer renames existing content to a timestamped backup.
 
-After a successful install, run:
+The installer clones and validates the configured Hub before changing links or config. After a successful install, run a remote validation once more through the registered CLI:
 
 ```bash
-python3 HUB/tools/wuditask.py --json validate
+python3 TOOL/tools/wuditask.py --json validate
 ```
 
-Report the registered absolute path and validation result. Rerun this skill whenever the clone moves.
+Report the registered tool path, Hub remote and branch, and validation result. Rerun this skill whenever the tool clone moves or the Hub remote changes.

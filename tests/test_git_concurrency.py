@@ -10,9 +10,17 @@ from typing import Any
 from wuditask.errors import WudiTaskError
 from wuditask.gitops import GitCoordinator
 from wuditask.repository import TaskRepository
-from wuditask.workflow import claim_task
+from wuditask.workflow import claim_task, create_task
 
-from tests.helpers import ACTOR, OTHER_ACTOR, add_task, git, make_repository
+from tests.helpers import (
+    ACTOR,
+    OTHER_ACTOR,
+    add_task,
+    git,
+    make_hub_origin,
+    make_repository,
+    spec,
+)
 
 FIRST_ID = "WDT-20260711T120000Z-111111"
 SECOND_ID = "WDT-20260711T120001Z-222222"
@@ -38,7 +46,7 @@ class GitConcurrencyTests(unittest.TestCase):
         repository = make_repository(seed)
         add_task(repository, FIRST_ID, title="First task")
         add_task(repository, SECOND_ID, title="Second task")
-        git(["add", "data"], seed)
+        git(["add", "hub.json", "data"], seed)
         git(["commit", "-m", "seed tasks"], seed)
         git(["remote", "add", "origin", str(self.origin)], seed)
         git(["push", "-u", "origin", "main"], seed)
@@ -62,8 +70,18 @@ class GitConcurrencyTests(unittest.TestCase):
                 barrier.wait(timeout=10)
 
         coordinators = (
-            GitCoordinator(self.client_a, before_push=before_push, max_attempts=6),
-            GitCoordinator(self.client_b, before_push=before_push, max_attempts=6),
+            GitCoordinator(
+                remote=str(self.origin),
+                branch="main",
+                before_push=before_push,
+                max_attempts=6,
+            ),
+            GitCoordinator(
+                remote=str(self.origin),
+                branch="main",
+                before_push=before_push,
+                max_attempts=6,
+            ),
         )
         calls = (
             (coordinators[0], ACTOR, first_target),
@@ -149,7 +167,10 @@ class GitConcurrencyTests(unittest.TestCase):
                 if process.returncode != 0:
                     raise AssertionError(process.stderr)
 
-        coordinator = AmbiguousPushCoordinator(self.client_a)
+        coordinator = AmbiguousPushCoordinator(
+            remote=str(self.origin),
+            branch="main",
+        )
         result = coordinator.write(
             lambda repository: claim_task(repository, ACTOR, task_id=FIRST_ID),
             ACTOR,
@@ -160,6 +181,52 @@ class GitConcurrencyTests(unittest.TestCase):
         self.assertEqual(
             "alice",
             self._remote_index().open[FIRST_ID].task["owner"]["login"],
+        )
+
+    def test_remote_write_advances_only_configured_hub_branch(self) -> None:
+        hub = make_hub_origin(self.base, name="separate-hub", branch="queue")
+        tool = self.base / "tool"
+        tool.mkdir()
+        git(["init", "-b", "main"], tool)
+        git(["config", "user.name", "tool"], tool)
+        git(["config", "user.email", "tool@example.invalid"], tool)
+        (tool / "VERSION").write_text("1\n", encoding="utf-8")
+        git(["add", "VERSION"], tool)
+        git(["commit", "-m", "tool version"], tool)
+        tool_head = git(["rev-parse", "HEAD"], tool).stdout.strip()
+        hub_head = git(["rev-parse", "refs/heads/queue"], hub).stdout.strip()
+
+        coordinator = GitCoordinator(remote=str(hub), branch="queue")
+        result = coordinator.write(
+            lambda repository: create_task(
+                repository,
+                spec("Separate Hub task"),
+                ACTOR,
+                task_id="WDT-20260711T120002Z-333333",
+                now="2026-07-11T12:00:02Z",
+            ),
+            ACTOR,
+            lambda payload: f"wuditask: add {payload['task_id']}",
+        )
+
+        new_hub_head = git(["rev-parse", "refs/heads/queue"], hub).stdout.strip()
+        changed_paths = git(
+            [
+                "diff-tree",
+                "--no-commit-id",
+                "--name-only",
+                "-r",
+                new_hub_head,
+            ],
+            hub,
+        ).stdout.splitlines()
+        self.assertTrue(result["sync"]["confirmed"])
+        self.assertNotEqual(hub_head, new_hub_head)
+        self.assertEqual(tool_head, git(["rev-parse", "HEAD"], tool).stdout.strip())
+        self.assertEqual([], git(["status", "--porcelain"], tool).stdout.splitlines())
+        self.assertEqual(
+            ["data/open/WDT-20260711T120002Z-333333.json"],
+            changed_paths,
         )
 
 

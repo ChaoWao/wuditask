@@ -6,8 +6,12 @@ from pathlib import Path
 from typing import Any, Iterable
 
 from .errors import DataValidationError, WudiTaskError
-from .model import require_valid_task, validate_task
+from .model import SCHEMA_VERSION, require_valid_task, validate_task
 from .util import atomic_write_json, read_json
+
+
+HUB_SCHEMA_VERSION = 1
+TOOL_API_VERSION = 1
 
 
 @dataclass(frozen=True)
@@ -33,12 +37,104 @@ class TaskIndex:
 class TaskRepository:
     def __init__(self, root: Path) -> None:
         self.root = root.resolve()
+        self.manifest_path = self.root / "hub.json"
         self.open_dir = self.root / "data" / "open"
         self.archive_dir = self.root / "data" / "archive"
 
+    def initialize(self) -> None:
+        self._require_safe_layout()
+        if not self.manifest_path.exists():
+            atomic_write_json(
+                self.manifest_path,
+                {
+                    "schema_version": HUB_SCHEMA_VERSION,
+                    "tool_api_version": TOOL_API_VERSION,
+                },
+            )
+        issues = self._manifest_issues()
+        if issues:
+            raise DataValidationError(issues)
+        self.ensure_layout()
+
     def ensure_layout(self) -> None:
+        self._require_safe_layout()
         self.open_dir.mkdir(parents=True, exist_ok=True)
         self.archive_dir.mkdir(parents=True, exist_ok=True)
+
+    def _layout_issues(self) -> list[dict[str, str]]:
+        issues: list[dict[str, str]] = []
+        expected = (
+            (self.manifest_path, "file"),
+            (self.root / "data", "directory"),
+            (self.open_dir, "directory"),
+            (self.archive_dir, "directory"),
+        )
+        for path, kind in expected:
+            relative = path.relative_to(self.root).as_posix()
+            if path.is_symlink():
+                issues.append({"path": relative, "message": "must not be a symlink"})
+                continue
+            if not path.exists():
+                continue
+            matches = path.is_file() if kind == "file" else path.is_dir()
+            if not matches:
+                issues.append({"path": relative, "message": f"must be a {kind}"})
+        data_dir = self.root / "data"
+        if data_dir.is_dir() and not data_dir.is_symlink():
+            for path in data_dir.rglob("*"):
+                if path.is_symlink():
+                    issues.append(
+                        {
+                            "path": path.relative_to(self.root).as_posix(),
+                            "message": "must not be a symlink",
+                        }
+                    )
+        return issues
+
+    def _require_safe_layout(self) -> None:
+        issues = self._layout_issues()
+        if issues:
+            raise DataValidationError(issues)
+
+    def _manifest_issues(self) -> list[dict[str, str]]:
+        relative = "hub.json"
+        try:
+            manifest = read_json(self.manifest_path)
+        except WudiTaskError as exc:
+            return [{"path": relative, "message": exc.message}]
+        expected_keys = {"schema_version", "tool_api_version"}
+        if not isinstance(manifest, dict):
+            return [{"path": relative, "message": "must be a JSON object"}]
+        issues: list[dict[str, str]] = []
+        if set(manifest) != expected_keys:
+            issues.append(
+                {
+                    "path": relative,
+                    "message": "must contain only schema_version and tool_api_version",
+                }
+            )
+        if manifest.get("schema_version") != HUB_SCHEMA_VERSION:
+            issues.append(
+                {
+                    "path": f"{relative}:$.schema_version",
+                    "message": f"must equal {HUB_SCHEMA_VERSION}",
+                }
+            )
+        if manifest.get("tool_api_version") != TOOL_API_VERSION:
+            issues.append(
+                {
+                    "path": f"{relative}:$.tool_api_version",
+                    "message": f"must equal {TOOL_API_VERSION}",
+                }
+            )
+        if HUB_SCHEMA_VERSION != SCHEMA_VERSION:
+            issues.append(
+                {
+                    "path": relative,
+                    "message": "tool task schema and Hub schema constants disagree",
+                }
+            )
+        return issues
 
     def _files(self, directory: Path, recursive: bool) -> Iterable[Path]:
         if not directory.exists():
@@ -47,7 +143,10 @@ class TaskRepository:
         return sorted(path for path in iterator if path.is_file())
 
     def validation_issues(self) -> list[dict[str, str]]:
-        issues: list[dict[str, str]] = []
+        issues = self._layout_issues()
+        if issues:
+            return issues
+        issues = self._manifest_issues()
         seen: dict[str, Path] = {}
         locations = (
             (self._files(self.open_dir, False), False),
@@ -132,6 +231,7 @@ class TaskRepository:
         return path
 
     def write_open(self, task: dict[str, Any]) -> Path:
+        self._require_safe_layout()
         require_valid_task(task, archived=False)
         path = self.open_dir / f"{task['id']}.json"
         if not path.exists():
@@ -144,6 +244,7 @@ class TaskRepository:
         return path
 
     def archive(self, task: dict[str, Any]) -> Path:
+        self._require_safe_layout()
         require_valid_task(task, archived=True)
         source = self.open_dir / f"{task['id']}.json"
         if not source.exists():

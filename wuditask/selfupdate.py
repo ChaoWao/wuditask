@@ -7,6 +7,7 @@ import tempfile
 from pathlib import Path
 from typing import Any
 
+from .configuration import load_config
 from .errors import WudiTaskError
 
 
@@ -173,29 +174,43 @@ def _candidate_verification(checkout: Path) -> dict[str, Any]:
 
 
 def self_update(
-    hub_root: Path,
+    tool_root: Path,
     *,
     check_only: bool = False,
     home: Path | None = None,
 ) -> dict[str, Any]:
-    root = hub_root.expanduser().resolve()
+    root = tool_root.expanduser().resolve()
     home = (home or Path.home()).expanduser().resolve()
+    config = load_config(home=home, expected_tool_path=root)
     top_level = Path(_git_value(root, "rev-parse", "--show-toplevel")).resolve()
     if top_level != root:
         raise WudiTaskError(
-            "selfupdate_invalid_hub",
-            "The configured hub path is not the root of its Git repository.",
-            details={"hub_path": str(root), "git_root": str(top_level)},
+            "selfupdate_invalid_tool",
+            "The tool path is not the root of its Git repository.",
+            details={"tool_path": str(root), "git_root": str(top_level)},
         )
     branch = _git_value(root, "branch", "--show-current")
     remote = _git_value(root, "remote", "get-url", "origin")
+    if config.tool_remote != remote or config.tool_branch != branch:
+        raise WudiTaskError(
+            "selfupdate_tool_config_mismatch",
+            "The tool clone Git state does not match the registered update source.",
+            details={
+                "configured_remote": config.tool_remote,
+                "actual_remote": remote,
+                "configured_branch": config.tool_branch,
+                "actual_branch": branch,
+                "action": "Switch back to the registered tool branch and remote, or run the wuditask-install skill again.",
+            },
+            exit_code=3,
+        )
     changes = _worktree_changes(root)
     if changes and not check_only:
         raise WudiTaskError(
             "selfupdate_dirty_worktree",
             "WudiTask has local changes; refusing to overwrite or stash them.",
             details={
-                "hub_path": str(root),
+                "tool_path": str(root),
                 "changes": changes,
                 "action": "Commit, discard, or move these changes explicitly, then retry.",
             },
@@ -228,7 +243,7 @@ def self_update(
         return {
             "message": "WudiTask is already up to date.",
             "status": "up_to_date",
-            "hub_path": str(root),
+            "tool_path": str(root),
             "branch": branch,
             "remote": remote,
             "commit": local_head,
@@ -244,7 +259,7 @@ def self_update(
             return {
                 "message": f"WudiTask cannot fast-forward because the clone is {state}.",
                 "status": state,
-                "hub_path": str(root),
+                "tool_path": str(root),
                 "branch": branch,
                 "remote": remote,
                 "local_commit": local_head,
@@ -257,7 +272,7 @@ def self_update(
             f"selfupdate_{state}",
             f"WudiTask cannot fast-forward because the clone is {state}.",
             details={
-                "hub_path": str(root),
+                "tool_path": str(root),
                 "branch": branch,
                 "local_commit": local_head,
                 "remote_commit": remote_head,
@@ -269,7 +284,7 @@ def self_update(
         return {
             "message": f"WudiTask has {commit_count} update commit(s) available.",
             "status": "update_available",
-            "hub_path": str(root),
+            "tool_path": str(root),
             "branch": branch,
             "remote": remote,
             "local_commit": local_head,
@@ -287,7 +302,7 @@ def self_update(
     candidate_head = ""
     for attempt in range(1, 4):
         with tempfile.TemporaryDirectory(prefix="wuditask-selfupdate-") as temporary:
-            checkout = Path(temporary) / "hub"
+            checkout = Path(temporary) / "tool"
             _run(
                 [
                     "git",
@@ -341,7 +356,7 @@ def self_update(
     return {
         "message": f"Updated WudiTask from {local_head[:7]} to {candidate_head[:7]}.",
         "status": "updated",
-        "hub_path": str(root),
+        "tool_path": str(root),
         "branch": branch,
         "remote": remote,
         "from_commit": local_head,

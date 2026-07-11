@@ -9,7 +9,7 @@ Use the registered WudiTask CLI. Do not edit, move, or delete task JSON directly
 
 ## Locate the CLI
 
-Read `~/.wuditask/config.json`, take its absolute `hub_path`, and invoke `python3 <hub_path>/tools/wuditask.py --json ...`. If registration is missing or stale, ask the user to invoke `$wuditask-install` or `/wuditask-install`.
+Read `~/.wuditask/config.json`, take its absolute `tool_path`, and invoke `python3 <tool_path>/tools/wuditask.py --json ...`. The CLI reads the task Hub remote and branch from the same config. If registration is missing or stale, ask the user to invoke `$wuditask-install` or `/wuditask-install`.
 
 ## Prepare the outcome
 
@@ -27,7 +27,7 @@ For `failed` or `cancelled`, provide a concrete result or reason. These outcomes
 ## Archive
 
 ```bash
-python3 <hub_path>/tools/wuditask.py --json archive TASK_ID \
+python3 <tool_path>/tools/wuditask.py --json archive TASK_ID \
   --outcome done \
   --result "Validation implemented and tests pass" \
   --evidence "AC-1=python3 -m unittest tests.test_upload: 12 passed"

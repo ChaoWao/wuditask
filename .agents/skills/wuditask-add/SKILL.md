@@ -9,9 +9,12 @@ Use the registered WudiTask CLI for the task mutation. Do not edit task JSON dir
 
 ## Locate the CLI
 
-1. Read `~/.wuditask/config.json` and take its absolute `hub_path`.
+1. Read `~/.wuditask/config.json` and take its absolute `tool_path`.
 2. If it is missing or stale, ask the user to invoke `$wuditask-install` or `/wuditask-install`.
-3. Invoke `python3 <hub_path>/tools/wuditask.py --json ...`.
+3. Invoke `python3 <tool_path>/tools/wuditask.py --json ...`.
+
+The CLI reads `hub_remote` and `hub_branch` from the same config. Do not infer the
+task Hub from the tool clone's Git remote.
 
 The CLI obtains the human owner from `gh api user` for remote writes.
 
@@ -49,7 +52,7 @@ Only when no suitable GitHub repository exists for the narrative, keep the compl
 ## Add the task
 
 ```bash
-python3 <hub_path>/tools/wuditask.py --json add \
+python3 <tool_path>/tools/wuditask.py --json add \
   --repo acme/api \
   --title "Harden upload validation" \
   --goal "Reject malformed uploads before object storage" \

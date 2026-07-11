@@ -1,4 +1,4 @@
 interface:
   display_name: "Install WudiTask"
-  short_description: "Register this WudiTask clone for agents"
-  default_prompt: "Use $wuditask-install to register this WudiTask clone on my machine."
+  short_description: "Register the WudiTask tool and task Hub"
+  default_prompt: "Use $wuditask-install to register this WudiTask tool clone and its separate task Hub."

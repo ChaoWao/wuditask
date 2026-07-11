@@ -9,20 +9,20 @@ Use the registered WudiTask CLI for claims. Do not edit task JSON directly or be
 
 ## Locate the CLI
 
-Read `~/.wuditask/config.json`, take its absolute `hub_path`, and invoke `python3 <hub_path>/tools/wuditask.py --json ...`. If registration is missing or stale, ask the user to invoke `$wuditask-install` or `/wuditask-install`.
+Read `~/.wuditask/config.json`, take its absolute `tool_path`, and invoke `python3 <tool_path>/tools/wuditask.py --json ...`. The CLI reads the task Hub remote and branch from the same config. If registration is missing or stale, ask the user to invoke `$wuditask-install` or `/wuditask-install`.
 
 ## Claim
 
 Run from the target work repository:
 
 ```bash
-python3 <hub_path>/tools/wuditask.py --json execute
+python3 <tool_path>/tools/wuditask.py --json execute
 ```
 
 To claim a specific ID:
 
 ```bash
-python3 <hub_path>/tools/wuditask.py --json execute TASK_ID
+python3 <tool_path>/tools/wuditask.py --json execute TASK_ID
 ```
 
 Start work only when all are true:

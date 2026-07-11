@@ -1,12 +1,17 @@
 from __future__ import annotations
 
 import json
+import shutil
 import tempfile
 import unittest
 from pathlib import Path
 
 from wuditask.errors import WudiTaskError
 from wuditask.install import install_agent_access
+from wuditask.repository import TaskRepository
+from wuditask.util import atomic_write_json
+
+from tests.helpers import add_task, git, make_hub_origin
 
 ROOT = Path(__file__).resolve().parents[1]
 EXPECTED_SKILLS = {
@@ -22,24 +27,52 @@ EXPECTED_SKILLS = {
 }
 
 
-def make_hub(root: Path, skills: set[str] | None = None) -> Path:
-    hub = root / "hub"
-    (hub / "tools").mkdir(parents=True)
-    (hub / "tools" / "wuditask.py").write_text("#!/usr/bin/env python3\n")
-    for name in sorted(skills or EXPECTED_SKILLS):
-        skill = hub / ".agents" / "skills" / name
-        skill.mkdir(parents=True)
-        (skill / "SKILL.md").write_text(f"---\nname: {name}\n---\n")
-    return hub
+def make_tool(
+    root: Path,
+    skills: set[str] | None = None,
+    *,
+    content_source: Path | None = None,
+) -> Path:
+    tool = root / "tool"
+    if content_source is not None:
+        (tool / "tools").mkdir(parents=True)
+        shutil.copy2(
+            content_source / "tools" / "wuditask.py",
+            tool / "tools" / "wuditask.py",
+        )
+        shutil.copytree(
+            content_source / ".agents" / "skills",
+            tool / ".agents" / "skills",
+        )
+    else:
+        (tool / "tools").mkdir(parents=True)
+        (tool / "tools" / "wuditask.py").write_text("#!/usr/bin/env python3\n")
+        for name in sorted(skills or EXPECTED_SKILLS):
+            skill = tool / ".agents" / "skills" / name
+            skill.mkdir(parents=True)
+            (skill / "SKILL.md").write_text(f"---\nname: {name}\n---\n")
+    git(["init", "-b", "main"], tool)
+    git(["config", "user.name", "tool"], tool)
+    git(["config", "user.email", "tool@example.invalid"], tool)
+    git(["add", "."], tool)
+    git(["commit", "-m", "initialize tool"], tool)
+    git(["remote", "add", "origin", "https://example.invalid/wuditask.git"], tool)
+    return tool
 
 
 class InstallTests(unittest.TestCase):
     def test_installer_registers_all_skills_for_both_agent_products(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             home = Path(temporary)
-            result = install_agent_access(ROOT, home=home)
+            tool = make_tool(home / "fixture", content_source=ROOT)
+            hub_remote = make_hub_origin(home)
+            result = install_agent_access(
+                tool,
+                hub_remote=str(hub_remote),
+                home=home,
+            )
             config = json.loads((home / ".wuditask" / "config.json").read_text())
-            skills_root = ROOT / ".agents" / "skills"
+            skills_root = tool / ".agents" / "skills"
             skill_names = sorted(
                 path.name
                 for path in skills_root.iterdir()
@@ -48,7 +81,11 @@ class InstallTests(unittest.TestCase):
             self.assertEqual(EXPECTED_SKILLS, set(skill_names))
             self.assertEqual(skill_names, result["skills"])
 
-            self.assertEqual(str(ROOT.resolve()), config["hub_path"])
+            self.assertEqual(2, config["schema_version"])
+            self.assertEqual(str(tool.resolve()), config["tool_path"])
+            self.assertEqual(str(hub_remote), config["hub_remote"])
+            self.assertEqual("main", config["hub_branch"])
+            self.assertNotIn("hub_path", config)
             self.assertEqual(
                 str((home / ".wuditask" / "config.json").resolve()),
                 result["config"],
@@ -79,26 +116,120 @@ class InstallTests(unittest.TestCase):
     def test_installer_rejects_unexpected_skills_without_mutation(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
-            hub = make_hub(root, EXPECTED_SKILLS | {"wuditask-extra"})
+            tool = make_tool(root, EXPECTED_SKILLS | {"wuditask-extra"})
+            hub_remote = make_hub_origin(root)
             home = root / "home"
 
             with self.assertRaises(WudiTaskError) as raised:
-                install_agent_access(hub, home=home)
+                install_agent_access(
+                    tool,
+                    hub_remote=str(hub_remote),
+                    home=home,
+                )
 
-            self.assertEqual("invalid_hub_clone", raised.exception.code)
+            self.assertEqual("invalid_tool_clone", raised.exception.code)
             self.assertEqual(
                 ["wuditask-extra"],
                 raised.exception.details["unexpected_skills"],
             )
             self.assertFalse(home.exists())
 
+    def test_installer_rejects_incompatible_hub_before_local_mutation(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            tool = make_tool(root)
+            hub_remote = make_hub_origin(root)
+            seed = root / "hub-seed"
+            (seed / "hub.json").write_text(
+                '{"schema_version": 2, "tool_api_version": 1}\n',
+                encoding="utf-8",
+            )
+            git(["add", "hub.json"], seed)
+            git(["commit", "-m", "break hub contract"], seed)
+            git(["push", "origin", "main"], seed)
+            home = root / "home"
+
+            with self.assertRaises(WudiTaskError) as raised:
+                install_agent_access(
+                    tool,
+                    hub_remote=str(hub_remote),
+                    home=home,
+                )
+
+            self.assertEqual("invalid_task_data", raised.exception.code)
+            self.assertFalse(home.exists())
+
+    def test_installer_rejects_tool_repository_as_the_hub(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            tool = make_tool(root)
+            home = root / "home"
+
+            with self.assertRaises(WudiTaskError) as raised:
+                install_agent_access(
+                    tool,
+                    hub_remote="https://example.invalid/wuditask.git",
+                    home=home,
+                )
+
+            self.assertEqual("hub_matches_tool_repository", raised.exception.code)
+            self.assertFalse(home.exists())
+
+            git(
+                [
+                    "remote",
+                    "set-url",
+                    "origin",
+                    "https://github.com/Acme/WudiTask.git",
+                ],
+                tool,
+            )
+            with self.assertRaises(WudiTaskError) as alternate:
+                install_agent_access(
+                    tool,
+                    hub_remote="git@github.com:acme/wuditask.git",
+                    home=home,
+                )
+
+            self.assertEqual(
+                "hub_matches_tool_repository",
+                alternate.exception.code,
+            )
+
+    def test_installer_rejects_semantically_invalid_hub(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            tool = make_tool(root)
+            hub_remote = make_hub_origin(root)
+            seed = root / "hub-seed"
+            repository = TaskRepository(seed)
+            task_id = "WDT-20260711T120004Z-555555"
+            task = add_task(repository, task_id)
+            task["dependencies"] = ["WDT-20260711T120005Z-666666"]
+            atomic_write_json(repository.open_dir / f"{task_id}.json", task)
+            git(["add", "data"], seed)
+            git(["commit", "-m", "add task with missing dependency"], seed)
+            git(["push", "origin", "main"], seed)
+            home = root / "home"
+
+            with self.assertRaises(WudiTaskError) as raised:
+                install_agent_access(
+                    tool,
+                    hub_remote=str(hub_remote),
+                    home=home,
+                )
+
+            self.assertEqual("invalid_task_data", raised.exception.code)
+            self.assertFalse(home.exists())
+
     def test_installer_removes_only_registered_stale_skill_links(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
-            hub = make_hub(root)
+            tool = make_tool(root)
+            hub_remote = make_hub_origin(root)
             home = root / "home"
-            install_agent_access(hub, home=home)
-            stale_source = hub / ".agents" / "skills" / "wuditask"
+            install_agent_access(tool, hub_remote=str(hub_remote), home=home)
+            stale_source = tool / ".agents" / "skills" / "wuditask"
             stale_source.mkdir()
             for base in (home / ".agents" / "skills", home / ".claude" / "skills"):
                 (base / "wuditask").symlink_to(
@@ -113,7 +244,11 @@ class InstallTests(unittest.TestCase):
                 )
                 (base / "notes.txt").write_text("user-owned\n")
 
-            reconciled = install_agent_access(hub, home=home)
+            reconciled = install_agent_access(
+                tool,
+                hub_remote=str(hub_remote),
+                home=home,
+            )
             self.assertEqual(sorted(EXPECTED_SKILLS), reconciled["skills"])
             self.assertEqual(2, len(reconciled["removed_links"]))
             for base in (home / ".agents" / "skills", home / ".claude" / "skills"):
@@ -124,11 +259,16 @@ class InstallTests(unittest.TestCase):
     def test_installer_retargets_links_from_registered_previous_hub(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
-            old_hub = make_hub(root / "old")
-            new_hub = make_hub(root / "new")
+            old_tool = make_tool(root / "old")
+            new_tool = make_tool(root / "new")
+            hub_remote = make_hub_origin(root)
             home = root / "home"
-            install_agent_access(old_hub, home=home)
-            stale_source = old_hub / ".agents" / "skills" / "wuditask"
+            install_agent_access(
+                old_tool,
+                hub_remote=str(hub_remote),
+                home=home,
+            )
+            stale_source = old_tool / ".agents" / "skills" / "wuditask"
             stale_source.mkdir()
             for base in (home / ".agents" / "skills", home / ".claude" / "skills"):
                 (base / "wuditask").symlink_to(
@@ -136,31 +276,36 @@ class InstallTests(unittest.TestCase):
                     target_is_directory=True,
                 )
 
-            result = install_agent_access(new_hub, home=home)
+            result = install_agent_access(
+                new_tool,
+                hub_remote=str(hub_remote),
+                home=home,
+            )
 
             self.assertEqual(2, len(result["removed_links"]))
             config = json.loads((home / ".wuditask" / "config.json").read_text())
-            self.assertEqual(str(new_hub.resolve()), config["hub_path"])
+            self.assertEqual(str(new_tool.resolve()), config["tool_path"])
             for base in (home / ".agents" / "skills", home / ".claude" / "skills"):
                 self.assertFalse((base / "wuditask").exists())
                 for name in EXPECTED_SKILLS:
                     self.assertEqual(
-                        (new_hub / ".agents" / "skills" / name).resolve(),
+                        (new_tool / ".agents" / "skills" / name).resolve(),
                         (base / name).resolve(),
                     )
             self.assertEqual(
-                (new_hub / "tools" / "wuditask.py").resolve(),
+                (new_tool / "tools" / "wuditask.py").resolve(),
                 (home / ".local" / "bin" / "wuditask").resolve(),
             )
 
     def test_install_conflict_does_not_partially_mutate(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
-            hub = make_hub(root)
+            tool = make_tool(root)
+            hub_remote = make_hub_origin(root)
             home = root / "home"
             agent_skills = home / ".agents" / "skills"
             agent_skills.mkdir(parents=True)
-            stale_source = hub / ".agents" / "skills" / "wuditask"
+            stale_source = tool / ".agents" / "skills" / "wuditask"
             stale_source.mkdir()
             (agent_skills / "wuditask").symlink_to(
                 stale_source,
@@ -170,7 +315,11 @@ class InstallTests(unittest.TestCase):
             conflict.write_text("user-owned\n")
 
             with self.assertRaises(WudiTaskError) as raised:
-                install_agent_access(hub, home=home)
+                install_agent_access(
+                    tool,
+                    hub_remote=str(hub_remote),
+                    home=home,
+                )
 
             self.assertEqual("install_path_exists", raised.exception.code)
             self.assertTrue((agent_skills / "wuditask").is_symlink())
@@ -182,11 +331,12 @@ class InstallTests(unittest.TestCase):
     def test_invalid_product_parent_does_not_partially_mutate(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
-            hub = make_hub(root)
+            tool = make_tool(root)
+            hub_remote = make_hub_origin(root)
             home = root / "home"
             agent_skills = home / ".agents" / "skills"
             agent_skills.mkdir(parents=True)
-            stale_source = hub / ".agents" / "skills" / "wuditask"
+            stale_source = tool / ".agents" / "skills" / "wuditask"
             stale_source.mkdir()
             (agent_skills / "wuditask").symlink_to(
                 stale_source,
@@ -195,7 +345,11 @@ class InstallTests(unittest.TestCase):
             (home / ".claude").write_text("user-owned\n")
 
             with self.assertRaises(WudiTaskError) as raised:
-                install_agent_access(hub, home=home)
+                install_agent_access(
+                    tool,
+                    hub_remote=str(hub_remote),
+                    home=home,
+                )
 
             self.assertEqual("install_path_exists", raised.exception.code)
             self.assertTrue((agent_skills / "wuditask").is_symlink())
@@ -206,20 +360,31 @@ class InstallTests(unittest.TestCase):
     def test_install_is_idempotent(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             home = Path(temporary)
-            install_agent_access(ROOT, home=home)
-            second = install_agent_access(ROOT, home=home)
+            tool = make_tool(home / "fixture", content_source=ROOT)
+            hub_remote = make_hub_origin(home)
+            install_agent_access(tool, hub_remote=str(hub_remote), home=home)
+            second = install_agent_access(
+                tool,
+                hub_remote=str(hub_remote),
+                home=home,
+            )
             self.assertTrue(all(not link["changed"] for link in second["links"]))
 
     def test_installer_rejects_a_missing_required_skill(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             missing = "wuditask-release"
-            hub = make_hub(root, EXPECTED_SKILLS - {missing})
+            tool = make_tool(root, EXPECTED_SKILLS - {missing})
+            hub_remote = make_hub_origin(root)
 
             with self.assertRaises(WudiTaskError) as raised:
-                install_agent_access(hub, home=root / "home")
+                install_agent_access(
+                    tool,
+                    hub_remote=str(hub_remote),
+                    home=root / "home",
+                )
 
-            self.assertEqual("invalid_hub_clone", raised.exception.code)
+            self.assertEqual("invalid_tool_clone", raised.exception.code)
             self.assertEqual([missing], raised.exception.details["missing_skills"])
             self.assertEqual([], raised.exception.details["unexpected_skills"])
 

@@ -7,8 +7,9 @@ from pathlib import Path
 from typing import Any, Sequence
 
 from . import __version__
+from .configuration import load_config
 from .dependencies import dependency_report
-from .errors import DataValidationError, WudiTaskError
+from .errors import WudiTaskError
 from .gitops import GitCoordinator
 from .identity import detect_current_repo, resolve_identity
 from .install import install_agent_access
@@ -24,6 +25,7 @@ from .util import (
     timestamp_from_task_id,
     utc_now,
 )
+from .validation import validate_repository
 from .workflow import archive_task, claim_task, create_task, release_task
 
 HELP_COMMANDS = {
@@ -84,15 +86,15 @@ HELP_COMMANDS = {
         },
     },
     "install": {
-        "purpose": "Register this clone through symlinks for Codex and Claude.",
-        "usage": "wuditask install [--home PATH] [--replace]",
+        "purpose": "Register the tool clone and a separate task Hub remote.",
+        "usage": "wuditask install --hub-remote URL [--hub-branch BRANCH] [--home PATH] [--replace]",
         "agent_usage": {
             "codex": "$wuditask-install",
             "claude": "/wuditask-install",
         },
     },
     "selfupdate": {
-        "purpose": "Safely update the installed clone or directly maintain WudiTask.",
+        "purpose": "Safely update the installed tool clone or maintain WudiTask.",
         "usage": "wuditask selfupdate [--check]",
         "agent_usage": {
             "codex": "$wuditask-selfupdate",
@@ -112,11 +114,15 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--version", action="version", version=f"%(prog)s {__version__}"
     )
-    parser.add_argument("--hub", type=Path, help="Path to the WudiTask clone.")
+    parser.add_argument(
+        "--hub",
+        type=Path,
+        help="Path to a local task Hub checkout; requires --local.",
+    )
     parser.add_argument(
         "--local",
         action="store_true",
-        help="Read and write this clone only; do not synchronize with origin.",
+        help="Read and write the explicit --hub checkout only.",
     )
     parser.add_argument("--json", action="store_true", help="Emit stable JSON output.")
     parser.add_argument(
@@ -201,10 +207,12 @@ def _parser() -> argparse.ArgumentParser:
     build.add_argument("--output", type=Path, default=Path("_site"))
 
     install = commands.add_parser(
-        "install", help="Register this clone for Codex and Claude."
+        "install", help="Register this tool clone and a task Hub remote."
     )
     install.add_argument("--home", type=Path)
     install.add_argument("--replace", action="store_true")
+    install.add_argument("--hub-remote", required=True)
+    install.add_argument("--hub-branch", default="main")
 
     selfupdate = commands.add_parser(
         "selfupdate", help="Safely fast-forward this WudiTask clone."
@@ -342,6 +350,7 @@ def _help(topic: str | None) -> dict[str, Any]:
         "commands": [{"name": name, **details} for name, details in selected.items()],
         "notes": [
             "Use the operation-specific agent skill shown for each command.",
+            "Task commands use hub_remote and hub_branch from config; the tool origin is never used as the Hub.",
             "For add, use a matching GitHub Issue or PR as the canonical narrative when the owning repository is clear.",
             "Selfupdate fix directly maintains WudiTask in an isolated worktree; it does not create an Issue or queue task.",
             "Run commands from the target work repository so owner/name can be detected from origin.",
@@ -349,38 +358,6 @@ def _help(topic: str | None) -> dict[str, Any]:
             "Never start work until execute returns confirmed=true and sync.confirmed=true.",
             "Use --json before the command for stable agent-readable output.",
         ],
-    }
-
-
-def _validate_semantics(repository: TaskRepository) -> dict[str, Any]:
-    issues = repository.validation_issues()
-    if issues:
-        raise DataValidationError(issues)
-    index = repository.load_index()
-    reports = dependency_report(index)["tasks"]
-    semantic_issues: list[dict[str, str]] = []
-    for report in reports:
-        if report["cycle"]:
-            semantic_issues.append(
-                {
-                    "path": report["id"],
-                    "message": f"dependency cycle: {' -> '.join(report['cycle'])}",
-                }
-            )
-        for dependency in report["dependencies"]:
-            if not dependency["exists"]:
-                semantic_issues.append(
-                    {
-                        "path": report["id"],
-                        "message": f"missing dependency {dependency['id']}",
-                    }
-                )
-    if semantic_issues:
-        raise DataValidationError(semantic_issues)
-    return {
-        "message": "All task data and dependency references are valid.",
-        "open": len(index.open),
-        "archived": len(index.archived),
     }
 
 
@@ -500,8 +477,8 @@ def _emit_error(error: WudiTaskError, as_json: bool) -> None:
             )
 
 
-def run(args: argparse.Namespace, hub_root: Path) -> dict[str, Any]:
-    hub_root = (args.hub or hub_root).expanduser().resolve()
+def run(args: argparse.Namespace, tool_root: Path) -> dict[str, Any]:
+    tool_root = tool_root.expanduser().resolve()
     if args.command == "help":
         return _help(args.topic)
     if args.command == "selfupdate":
@@ -510,14 +487,43 @@ def run(args: argparse.Namespace, hub_root: Path) -> dict[str, Any]:
                 "selfupdate_local_mode_invalid",
                 "Self-update synchronizes with origin and cannot use --local.",
             )
-        return self_update(hub_root, check_only=args.check)
+        if args.hub is not None:
+            raise WudiTaskError(
+                "selfupdate_hub_path_invalid",
+                "Self-update acts only on the tool clone and does not accept --hub.",
+            )
+        return self_update(tool_root, check_only=args.check)
     if args.command == "install":
+        if args.local or args.hub is not None:
+            raise WudiTaskError(
+                "install_local_mode_invalid",
+                "Install registers the tool clone and a remote Hub; it does not accept --local or --hub.",
+            )
         return install_agent_access(
-            hub_root,
+            tool_root,
+            hub_remote=args.hub_remote,
+            hub_branch=args.hub_branch,
             home=args.home,
             replace=args.replace,
         )
-    coordinator = GitCoordinator(hub_root, local_only=args.local)
+    if args.local:
+        if args.hub is None:
+            raise WudiTaskError(
+                "local_hub_required",
+                "Local mode requires an explicit --hub path.",
+            )
+        coordinator = GitCoordinator(local_root=args.hub.expanduser().resolve())
+    else:
+        if args.hub is not None:
+            raise WudiTaskError(
+                "remote_hub_path_invalid",
+                "Remote mode uses hub_remote from config and does not accept --hub.",
+            )
+        config = load_config(expected_tool_path=tool_root)
+        coordinator = GitCoordinator(
+            remote=config.hub_remote,
+            branch=config.hub_branch,
+        )
 
     if args.command in {"add", "execute", "archive", "release"}:
         if args.actor and coordinator.distributed:
@@ -599,31 +605,31 @@ def run(args: argparse.Namespace, hub_root: Path) -> dict[str, Any]:
         if args.command == "show":
             return _show_task(repository, args.task_id)
         if args.command == "validate":
-            return _validate_semantics(repository)
+            return validate_repository(repository)
         if args.command == "build-site":
             output = args.output
             if not output.is_absolute():
-                output = hub_root / output
+                output = Path.cwd() / output
             hub_repo = (
                 repo_from_remote(coordinator.remote)
                 if coordinator.remote
-                else detect_current_repo(hub_root)
+                else detect_current_repo(repository.root)
             )
             return build_site(
                 repository.load_index(),
-                source=repository.root / "site",
+                source=tool_root / "site",
                 output=output,
                 hub_repo=hub_repo,
             )
     raise WudiTaskError("unknown_command", f"Unknown command: {args.command}")
 
 
-def main(argv: Sequence[str] | None = None, *, default_hub: Path | None = None) -> int:
+def main(argv: Sequence[str] | None = None, *, default_tool: Path | None = None) -> int:
     parser = _parser()
     args = parser.parse_args(argv)
-    hub_root = default_hub or Path(__file__).resolve().parents[1]
+    tool_root = default_tool or Path(__file__).resolve().parents[1]
     try:
-        result = run(args, hub_root)
+        result = run(args, tool_root)
     except WudiTaskError as error:
         _emit_error(error, args.json)
         return error.exit_code

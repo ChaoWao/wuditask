@@ -25,33 +25,28 @@ class GitCoordinator:
 
     def __init__(
         self,
-        root: Path,
         *,
-        local_only: bool = False,
+        local_root: Path | None = None,
+        remote: str | None = None,
+        branch: str | None = None,
         max_attempts: int = 5,
         before_push: BeforePush | None = None,
     ) -> None:
-        self.root = root.resolve()
-        self.local_only = local_only
+        if (local_root is None) == (remote is None):
+            raise WudiTaskError(
+                "invalid_git_coordinator",
+                "Select exactly one task Hub source: local_root or remote.",
+            )
+        if remote is not None and (not branch or not branch.strip()):
+            raise WudiTaskError(
+                "invalid_git_coordinator",
+                "A remote task Hub requires an explicit branch.",
+            )
+        self.root = local_root.resolve() if local_root is not None else None
+        self.remote = remote.strip() if remote is not None else None
+        self.branch = branch.strip() if branch is not None else None
         self.max_attempts = max_attempts
         self.before_push = before_push
-        self.remote = (
-            None if local_only else self._git_value("remote", "get-url", "origin")
-        )
-        self.branch = self._git_value("branch", "--show-current") or "main"
-
-    def _git_value(self, *arguments: str) -> str | None:
-        process = subprocess.run(
-            ["git", *arguments],
-            cwd=self.root,
-            check=False,
-            capture_output=True,
-            text=True,
-        )
-        if process.returncode != 0:
-            return None
-        value = process.stdout.strip()
-        return value or None
 
     @property
     def distributed(self) -> bool:
@@ -60,8 +55,8 @@ class GitCoordinator:
     @contextlib.contextmanager
     def snapshot(self) -> Iterator[TaskRepository]:
         if not self.distributed:
+            assert self.root is not None
             repository = TaskRepository(self.root)
-            repository.ensure_layout()
             yield repository
             return
         with tempfile.TemporaryDirectory(prefix="wuditask-read-") as temporary:
@@ -76,9 +71,9 @@ class GitCoordinator:
         commit_message: Callable[[dict[str, Any]], str],
     ) -> dict[str, Any]:
         if not self.distributed:
+            assert self.root is not None
             with self._local_lock():
                 repository = TaskRepository(self.root)
-                repository.ensure_layout()
                 result = operation(repository)
             result["sync"] = {
                 "mode": "local",
@@ -136,7 +131,6 @@ class GitCoordinator:
                     self.before_push(attempt, checkout)
                 push = self._push(checkout)
                 if push.returncode == 0:
-                    refresh = self._refresh_local()
                     result["sync"] = {
                         "mode": "remote",
                         "confirmed": True,
@@ -144,7 +138,6 @@ class GitCoordinator:
                         "remote": self.remote,
                         "branch": self.branch,
                         "commit": commit,
-                        "local_refresh": refresh,
                     }
                     return result
                 combined = f"{push.stdout}\n{push.stderr}".strip()
@@ -153,7 +146,6 @@ class GitCoordinator:
                     time.sleep(0.04 * attempt)
                     continue
                 if self._remote_matches(result):
-                    refresh = self._refresh_local()
                     result["sync"] = {
                         "mode": "remote",
                         "confirmed": True,
@@ -162,7 +154,6 @@ class GitCoordinator:
                         "remote": self.remote,
                         "branch": self.branch,
                         "commit": commit,
-                        "local_refresh": refresh,
                     }
                     return result
                 raise WudiTaskError(
@@ -195,6 +186,8 @@ class GitCoordinator:
         )
 
     def _clone(self, checkout: Path) -> None:
+        assert self.remote is not None
+        assert self.branch is not None
         process = self._run(
             [
                 "git",
@@ -205,10 +198,10 @@ class GitCoordinator:
                 "--single-branch",
                 "--branch",
                 self.branch,
-                self.remote or "",
+                self.remote,
                 str(checkout),
             ],
-            cwd=self.root,
+            cwd=checkout.parent,
             allowed=None,
         )
         if process.returncode != 0:
@@ -224,35 +217,12 @@ class GitCoordinator:
             )
 
     def _push(self, checkout: Path) -> subprocess.CompletedProcess[str]:
+        assert self.branch is not None
         return self._run(
             ["git", "push", "origin", f"HEAD:refs/heads/{self.branch}"],
             cwd=checkout,
             allowed=None,
         )
-
-    def _refresh_local(self) -> dict[str, Any]:
-        status = self._run(
-            ["git", "status", "--porcelain"],
-            cwd=self.root,
-            allowed=None,
-        )
-        if status.returncode != 0 or status.stdout.strip():
-            return {"updated": False, "reason": "local clone is not clean"}
-        fetch = self._run(
-            ["git", "fetch", "origin", self.branch],
-            cwd=self.root,
-            allowed=None,
-        )
-        if fetch.returncode != 0:
-            return {"updated": False, "reason": "fetch failed"}
-        merge = self._run(
-            ["git", "merge", "--ff-only", "FETCH_HEAD"],
-            cwd=self.root,
-            allowed=None,
-        )
-        if merge.returncode != 0:
-            return {"updated": False, "reason": "local branch could not fast-forward"}
-        return {"updated": True}
 
     def _remote_matches(self, result: dict[str, Any]) -> bool:
         expected = result.get("task")
@@ -308,6 +278,7 @@ class GitCoordinator:
 
     @contextlib.contextmanager
     def _local_lock(self) -> Iterator[None]:
+        assert self.root is not None
         lock_path = self.root / ".wuditask.lock"
         lock_path.parent.mkdir(parents=True, exist_ok=True)
         with lock_path.open("a+", encoding="utf-8") as handle:

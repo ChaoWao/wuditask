@@ -1,11 +1,17 @@
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import sys
 import tempfile
 import unittest
 from pathlib import Path
+
+from wuditask.repository import TaskRepository
+from wuditask.util import atomic_write_json
+
+from tests.helpers import add_task, git, make_hub_origin
 
 ROOT = Path(__file__).resolve().parents[1]
 TOOL = ROOT / "tools" / "wuditask.py"
@@ -34,6 +40,7 @@ class CliTests(unittest.TestCase):
     def test_json_lifecycle(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             hub = Path(temporary)
+            TaskRepository(hub).initialize()
             added = self.run_cli(
                 hub,
                 "add",
@@ -76,6 +83,117 @@ class CliTests(unittest.TestCase):
             )
             self.assertEqual(0, archived.returncode, archived.stderr)
             self.assertTrue(json.loads(archived.stdout)["confirmed"])
+
+    def test_local_hub_path_is_explicit_and_local_only(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            hub = Path(temporary)
+            TaskRepository(hub).initialize()
+            missing = subprocess.run(
+                [sys.executable, str(TOOL), "--local", "--json", "validate"],
+                cwd=ROOT,
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+            remote = subprocess.run(
+                [
+                    sys.executable,
+                    str(TOOL),
+                    "--hub",
+                    str(hub),
+                    "--json",
+                    "validate",
+                ],
+                cwd=ROOT,
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+
+        self.assertEqual(
+            "local_hub_required", json.loads(missing.stdout)["error"]["code"]
+        )
+        self.assertEqual(
+            "remote_hub_path_invalid", json.loads(remote.stdout)["error"]["code"]
+        )
+
+    def test_cli_build_site_uses_tool_assets_with_data_only_hub(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            base = Path(temporary)
+            hub = base / "hub"
+            TaskRepository(hub).initialize()
+            output = base / "site"
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(TOOL),
+                    "--hub",
+                    str(hub),
+                    "--local",
+                    "--json",
+                    "build-site",
+                    "--output",
+                    str(output),
+                ],
+                cwd=ROOT,
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+
+            self.assertEqual(0, result.returncode, result.stderr)
+            self.assertTrue((output / "index.html").is_file())
+            self.assertFalse((hub / "site").exists())
+
+    def test_remote_read_uses_configured_hub_and_branch(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            base = Path(temporary)
+            home = base / "home"
+            home.mkdir()
+            hub = make_hub_origin(base, branch="queue")
+            seed = base / "hub-seed"
+            add_task(
+                TaskRepository(seed),
+                "WDT-20260711T120007Z-888888",
+                title="Configured Hub task",
+            )
+            git(["add", "data"], seed)
+            git(["commit", "-m", "add configured task"], seed)
+            git(["push", "origin", "queue"], seed)
+            atomic_write_json(
+                home / ".wuditask" / "config.json",
+                {
+                    "schema_version": 2,
+                    "tool_path": str(ROOT),
+                    "tool_remote": git(
+                        ["remote", "get-url", "origin"], ROOT
+                    ).stdout.strip(),
+                    "tool_branch": git(
+                        ["branch", "--show-current"], ROOT
+                    ).stdout.strip(),
+                    "hub_remote": str(hub),
+                    "hub_branch": "queue",
+                    "installed_at": "2026-07-11T12:00:00Z",
+                },
+            )
+            environment = {**os.environ, "HOME": str(home)}
+
+            result = subprocess.run(
+                [sys.executable, str(TOOL), "--json", "list"],
+                cwd=ROOT,
+                env=environment,
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+
+        self.assertEqual(0, result.returncode, result.stderr)
+        payload = json.loads(result.stdout)
+        self.assertEqual(1, payload["count"])
+        self.assertEqual(
+            "WDT-20260711T120007Z-888888",
+            payload["open_tasks"][0]["id"],
+        )
 
     def test_missing_spec_returns_structured_questions(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -188,6 +306,18 @@ class CliTests(unittest.TestCase):
         self.assertEqual(0, text_help.returncode, text_help.stderr)
         self.assertIn("$wuditask-selfupdate fix <request>", text_help.stdout)
         self.assertIn("does not create an Issue or queue task", text_help.stdout)
+
+    def test_module_entry_point_uses_the_tool_root(self) -> None:
+        result = subprocess.run(
+            [sys.executable, "-m", "wuditask", "--version"],
+            cwd=ROOT,
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+
+        self.assertEqual(0, result.returncode, result.stderr)
+        self.assertEqual("wuditask 0.3.0", result.stdout.strip())
 
 
 if __name__ == "__main__":
