@@ -51,7 +51,7 @@ install skill 调用同仓 Python：
 python3 tools/wuditask.py --json install
 ```
 
-安装结果只做路径注册与 symlink，不执行 pip/npm 安装。clone 移动后必须重新运行 install。若目标 skill 路径已有其他内容，默认停止；只有用户确认后才使用 `--replace`，旧内容会改名保留为 backup。
+安装结果只做路径注册与 symlink，不执行 pip/npm 安装，也不复制 skill。clone 保持原路径时，`git pull` 会立即更新 Codex、Claude 和 CLI，无需重新 install；clone 移动后才必须重新运行。若目标 skill 路径已有其他内容，默认停止；只有用户确认后才使用 `--replace`，旧内容会改名保留为 backup。
 
 ## 2. 添加任务
 

@@ -86,6 +86,30 @@ class CliTests(unittest.TestCase):
         self.assertEqual("insufficient_task_spec", payload["error"]["code"])
         self.assertIn("questions", payload["error"]["details"])
 
+    def test_help_is_read_only_and_topic_aware(self) -> None:
+        result = subprocess.run(
+            [
+                sys.executable,
+                str(TOOL),
+                "--json",
+                "help",
+                "archive",
+            ],
+            cwd=ROOT,
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+
+        self.assertEqual(0, result.returncode, result.stderr)
+        payload = json.loads(result.stdout)
+        self.assertTrue(payload["ok"])
+        self.assertEqual("archive", payload["topic"])
+        self.assertEqual(["archive"], [item["name"] for item in payload["commands"]])
+        self.assertEqual(
+            "/wuditask help [topic]", payload["agent_invocation"]["claude"]
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

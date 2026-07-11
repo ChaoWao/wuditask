@@ -25,6 +25,41 @@ from .util import (
 )
 from .workflow import archive_task, claim_task, create_task, release_task
 
+HELP_COMMANDS = {
+    "add": {
+        "purpose": "Add a fully specified task for a GitHub work repository.",
+        "usage": "wuditask add --title TEXT --goal TEXT --accept TEXT [--verify type::value] [--depends TASK_ID]",
+    },
+    "execute": {
+        "purpose": "Claim one unowned task whose dependencies are complete.",
+        "usage": "wuditask execute [TASK_ID] [--repo owner/name]",
+    },
+    "dep-check": {
+        "purpose": "Expand dependencies and explain whether work is ready.",
+        "usage": "wuditask dep-check [TASK_ID]",
+    },
+    "archive": {
+        "purpose": "Archive claimed work with an outcome and acceptance evidence.",
+        "usage": "wuditask archive TASK_ID --outcome done --result TEXT --evidence AC-N=TEXT",
+    },
+    "release": {
+        "purpose": "Return a task owned by the current GitHub user to the queue.",
+        "usage": "wuditask release TASK_ID --reason TEXT",
+    },
+    "list": {
+        "purpose": "List open, archived, or all tasks.",
+        "usage": "wuditask list [--scope open|archive|all] [--repo owner/name]",
+    },
+    "show": {
+        "purpose": "Show one task and its derived dependency state.",
+        "usage": "wuditask show TASK_ID",
+    },
+    "install": {
+        "purpose": "Register this clone through symlinks for Codex and Claude.",
+        "usage": "wuditask install [--home PATH] [--replace]",
+    },
+}
+
 
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
@@ -127,6 +162,15 @@ def _parser() -> argparse.ArgumentParser:
     )
     install.add_argument("--home", type=Path)
     install.add_argument("--replace", action="store_true")
+
+    help_command = commands.add_parser(
+        "help", help="Show workflow and command examples."
+    )
+    help_command.add_argument(
+        "topic",
+        nargs="?",
+        choices=("workflow", *HELP_COMMANDS),
+    )
     return parser
 
 
@@ -226,6 +270,36 @@ def _evidence(values: list[str] | None) -> dict[str, str]:
     return result
 
 
+def _help(topic: str | None) -> dict[str, Any]:
+    workflow = [
+        "add: record a task with a repository, goal, and acceptance criteria",
+        "execute: claim one ready and unowned task; start work only after confirmed push",
+        "dep-check: inspect cross-repository blockers and completion evidence",
+        "archive: preserve the result as done, failed, or cancelled instead of deleting it",
+    ]
+    selected = (
+        {topic: HELP_COMMANDS[topic]}
+        if topic and topic != "workflow"
+        else HELP_COMMANDS
+    )
+    return {
+        "message": "WudiTask help",
+        "topic": topic or "workflow",
+        "agent_invocation": {
+            "codex": "$wuditask help [topic]",
+            "claude": "/wuditask help [topic]",
+        },
+        "workflow": workflow,
+        "commands": [{"name": name, **details} for name, details in selected.items()],
+        "notes": [
+            "Run commands from the target work repository so owner/name can be detected from origin.",
+            "Remote writes use the human identity from gh api user.",
+            "Never start work until execute returns confirmed=true and sync.confirmed=true.",
+            "Use --json before the command for stable agent-readable output.",
+        ],
+    }
+
+
 def _validate_semantics(repository: TaskRepository) -> dict[str, Any]:
     issues = repository.validation_issues()
     if issues:
@@ -309,6 +383,23 @@ def _show_task(repository: TaskRepository, task_id: str) -> dict[str, Any]:
 
 
 def _text(result: dict[str, Any]) -> str:
+    if isinstance(result.get("commands"), list):
+        lines = ["WudiTask workflow"]
+        for step in result.get("workflow", []):
+            lines.append(f"  {step}")
+        lines.extend(["", "Commands"])
+        for command in result["commands"]:
+            lines.append(f"  {command['name']}: {command['purpose']}")
+            lines.append(f"    {command['usage']}")
+        lines.extend(
+            [
+                "",
+                "Agent invocation",
+                f"  Codex: {result['agent_invocation']['codex']}",
+                f"  Claude: {result['agent_invocation']['claude']}",
+            ]
+        )
+        return "\n".join(lines)
     if isinstance(result.get("message"), str):
         return result["message"]
     tasks = result.get("tasks") or result.get("open_tasks")
@@ -354,6 +445,8 @@ def _emit_error(error: WudiTaskError, as_json: bool) -> None:
 
 def run(args: argparse.Namespace, hub_root: Path) -> dict[str, Any]:
     hub_root = (args.hub or hub_root).expanduser().resolve()
+    if args.command == "help":
+        return _help(args.topic)
     if args.command == "install":
         return install_agent_access(
             hub_root,

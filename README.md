@@ -46,6 +46,24 @@ python3 tools/wuditask.py --local validate
 python3 tools/wuditask.py --json install
 ```
 
+install 创建的是符号链接，不复制 skill 或 CLI：
+
+- `~/.agents/skills/wuditask` 与 `~/.claude/skills/wuditask` 指向当前 clone。
+- `~/.local/bin/wuditask` 指向当前 clone 的 `tools/wuditask.py`。
+- clone 保持原路径时，`git pull` 后直接生效，无需重新 install。
+- 若一个长期运行的 agent 会话仍缓存旧 skill，重新打开会话即可，不需要 reinstall。
+- clone 被移动或删除时，重新运行 `$wuditask-install` 或 `/wuditask-install` 修复绝对路径。
+
+查看用法：
+
+```text
+Codex:  $wuditask help
+Claude: /wuditask help
+CLI:    wuditask help
+```
+
+也可以查看单项，例如 `/wuditask help archive` 或 `wuditask help dep-check`。
+
 ## 日常命令
 
 在任意工作仓库中添加任务。省略 `--repo` 时会读取当前仓库的 GitHub origin：

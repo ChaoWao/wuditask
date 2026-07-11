@@ -28,6 +28,8 @@ Confirm the JSON reports:
 - `wuditask` and `wuditask-install` links under both `~/.agents/skills` and `~/.claude/skills`;
 - `~/.local/bin/wuditask` linked to the repository's Python entry point.
 
+These are symbolic links, not copied files. A normal `git pull` in the same clone updates both products immediately; do not reinstall after updates. If a long-running agent session has cached old instructions, reopen the session instead. Reinstall only when the clone moves, is replaced at another path, or a link is damaged.
+
 If `launcher_on_path` is false, mention the launcher path; agents can still call the absolute Python entry point from config.
 
 If installation returns `install_path_exists`, inspect and tell the user which destination conflicts. Do not use `--replace` until the user explicitly approves. When approved, rerun with `--replace`; the installer renames existing content to a timestamped backup.

@@ -28,11 +28,14 @@ For a large add request, pass `--spec <file>` or `--spec -`. A spec contains tit
 ## Read commands
 
 ```text
+help [workflow|add|execute|dep-check|archive|release|list|show|install]
 dep-check [TASK_ID]
 list [--scope open|archive|all] [--repo owner/name]
 show TASK_ID
 validate
 ```
+
+`help` is identity-free and read-only. Agent invocations are `$wuditask help [topic]` in Codex and `/wuditask help [topic]` in Claude.
 
 ## Error handling
 

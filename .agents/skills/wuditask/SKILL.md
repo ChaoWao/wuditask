@@ -1,6 +1,6 @@
 ---
 name: wuditask
-description: Operate a shared WudiTask GitHub-backed task queue from any work repository. Use when a user asks an agent to add or record work, pick/pop/claim/execute the next task, inspect task dependencies or readiness, archive completed/failed/cancelled work with acceptance evidence, release a claimed task, or inspect shared task state. Enforce human GitHub ownership, ordinary-push confirmation, and the repository's Python CLI contract.
+description: Operate and explain a shared WudiTask GitHub-backed task queue from any work repository. Use when a user asks how to use WudiTask or invokes help, asks an agent to add or record work, pick/pop/claim/execute the next task, inspect task dependencies or readiness, archive completed/failed/cancelled work with acceptance evidence, release a claimed task, or inspect shared task state. Enforce human GitHub ownership, ordinary-push confirmation, and the repository's Python CLI contract.
 ---
 
 # WudiTask
@@ -16,8 +16,21 @@ Use the registered WudiTask Python CLI for every task mutation. Do not edit task
 
 Keep `--json` before the subcommand. The CLI itself obtains the human owner from `gh api user` for remote writes.
 
+## Help and onboarding
+
+When invoked as `/wuditask help [topic]`, `$wuditask help [topic]`, or when the user asks how WudiTask works:
+
+1. Run `python3 <hub_path>/tools/wuditask.py --json help [topic]`.
+2. Explain the returned workflow and commands in the user's language.
+3. Show the matching Codex, Claude, and CLI invocation forms.
+4. Mention that install uses symlinks, so updates in the same clone do not require reinstall.
+5. Do not execute a mutating task command.
+
+Supported topics are `workflow`, `add`, `execute`, `dep-check`, `archive`, `release`, `list`, `show`, and `install`. With no topic, present the four-step add/execute/dep-check/archive workflow first, followed by a compact command reference.
+
 ## Choose the operation
 
+- Help, usage, or onboarding request: use `help`.
 - New work request or “record this”: use `add`.
 - “Take/pop/start the next task”: use `execute`.
 - Dependency/readiness question: use `dep-check`.
