@@ -125,7 +125,10 @@ def task_dependency_report(record: TaskRecord, index: TaskIndex) -> dict[str, An
             }
         )
     ready = not blockers
-    if task.get("claim") is not None:
+    if record.archived:
+        ready, _ = completion_is_ready(task)
+        state = task["completion"]["outcome"]
+    elif task.get("claim") is not None:
         state = "in_progress"
     elif ready:
         state = "ready"

@@ -448,7 +448,9 @@ def run(args: argparse.Namespace, hub_root: Path) -> dict[str, Any]:
             if not output.is_absolute():
                 output = hub_root / output
             hub_repo = (
-                repo_from_remote(coordinator.remote) if coordinator.remote else None
+                repo_from_remote(coordinator.remote)
+                if coordinator.remote
+                else detect_current_repo(hub_root)
             )
             return build_site(
                 repository.load_index(),
