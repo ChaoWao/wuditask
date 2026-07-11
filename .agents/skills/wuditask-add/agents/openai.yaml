@@ -1,0 +1,4 @@
+interface:
+  display_name: "Add WudiTask"
+  short_description: "Record well-specified GitHub-backed work"
+  default_prompt: "Use $wuditask-add to record this work in the shared WudiTask queue."

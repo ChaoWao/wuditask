@@ -45,7 +45,7 @@ WudiTask 不保存可漂移的 `status`：
 | `acceptance_criteria` | criterion[] | 至少一条可验证的完成条件 |
 | `dependencies` | string[] | 其他 WudiTask ID；不复制其仓库或验收内容 |
 | `claim` | claim 或 null | execute 的并发确认记录 |
-| `links` | string[] | PR、issue、设计稿或文档链接 |
+| `links` | string[] | canonical PR/Issue、设计稿或文档链接；有明确归属仓库时优先包含 Issue/PR URL |
 | `completion` | completion | 仅 archive 文件存在 |
 
 ### Identity
@@ -190,6 +190,12 @@ WudiTask 不保存可漂移的 `status`：
 ```
 
 agent skill 应把 `questions` 原样或等价地询问用户，获得答案后再执行 add。
+
+### Issue/PR 与任务文本的边界
+
+有明确归属 GitHub 仓库的工作，以已有匹配 open PR、已有匹配 open Issue 或在该仓新建的 Issue 作为完整问题叙述，并把规范 URL 放入 `links`。WudiTask 的 `goal`、`context` 与 `acceptance_criteria` 是精简执行合同，不复制整篇 Issue/PR 正文，避免两份叙述漂移。
+
+没有合适仓库承载 Issue/PR 时，完整叙述才保留在 WudiTask 文本字段中。schema v1 的 `repo` 仍表示实际执行仓库且为必填项；agent 不得虚构仓库，也不得借用 Task Hub 的 Issue 描述其他仓库工作。
 
 ## 修改格式
 

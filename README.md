@@ -37,7 +37,7 @@ python3 tools/wuditask.py --local validate
 然后在 Codex 中调用 `$wuditask-install`，或在 Claude Code 中调用 `/wuditask-install`。安装 skill 会：
 
 1. 把当前 clone 的绝对路径写入 `~/.wuditask/config.json`。
-2. 把 `wuditask` 和 `wuditask-install` 链接到 `~/.agents/skills` 与 `~/.claude/skills`。
+2. 自动发现 `.agents/skills/` 的直接子目录，把完整 WudiTask skill suite 链接到 `~/.agents/skills` 与 `~/.claude/skills`。
 3. 把一个无安装包的启动链接放到 `~/.local/bin/wuditask`。
 
 也可以直接运行：
@@ -48,11 +48,14 @@ python3 tools/wuditask.py --json install
 
 install 创建的是符号链接，不复制 skill 或 CLI：
 
-- `~/.agents/skills/wuditask` 与 `~/.claude/skills/wuditask` 指向当前 clone。
+- 两个 agent 目录下的 `wuditask*` skill 都分别指向当前 clone 中对应的 skill 目录。
 - `~/.local/bin/wuditask` 指向当前 clone 的 `tools/wuditask.py`。
-- clone 保持原路径时，`git pull` 后直接生效；更推荐使用带候选验证的 `/wuditask selfupdate`。两者都无需重新 install。
+- 既有 skill 内容随 clone 更新直接生效；更推荐使用带候选验证的 `$wuditask-selfupdate` 或 `/wuditask-selfupdate`。
+- 非 check 更新后若实际 skill 链接与 clone 不一致，selfupdate 返回 `reinstall_required=true`；此时无 `--replace` 地幂等运行一次 install，补齐新 symlink，并且只删除仍指向本 clone 的过期 skill symlink。普通内容更新不需要 install。
 - 若一个长期运行的 agent 会话仍缓存旧 skill，重新打开会话即可，不需要 reinstall。
 - clone 被移动或删除时，重新运行 `$wuditask-install` 或 `/wuditask-install` 修复绝对路径。
+
+从只安装 `wuditask` 与 `wuditask-install` 的旧版本首次升级到 operation-specific suite 时，第一次 selfupdate 仍由旧进程完成，无法提示新增 sibling。升级后先用仍然可用的 `$wuditask-install` 或 `/wuditask-install` 幂等运行一次，再使用新的独立名称；不需要 `--replace`。
 
 查看用法：
 
@@ -62,24 +65,36 @@ Claude: /wuditask help
 CLI:    wuditask help
 ```
 
-也可以查看单项，例如 `/wuditask help archive` 或 `wuditask help dep-check`。
+也可以查看单项，例如 `/wuditask help archive` 或 `wuditask help dep-check`。`wuditask` skill 只负责帮助和兼容路由；实际操作使用独立 skill：
+
+| 操作 | Codex | Claude Code |
+| --- | --- | --- |
+| 添加任务 | `$wuditask-add` | `/wuditask-add` |
+| 领取并执行 | `$wuditask-execute` | `/wuditask-execute` |
+| 检查依赖 | `$wuditask-dep-check` | `/wuditask-dep-check` |
+| 归档结果 | `$wuditask-archive` | `/wuditask-archive` |
+| 释放任务 | `$wuditask-release` | `/wuditask-release` |
+| 列表与详情 | `$wuditask-inspect` | `/wuditask-inspect` |
+| 更新或维护 WudiTask | `$wuditask-selfupdate` | `/wuditask-selfupdate` |
 
 安全检查并更新当前安装：
 
 ```text
-Claude: /wuditask selfupdate
-Codex:  $wuditask selfupdate
+Claude: /wuditask-selfupdate
+Codex:  $wuditask-selfupdate
 CLI:    wuditask selfupdate --check
         wuditask selfupdate
 ```
 
-`--check` 只 fetch 和报告；实际更新要求 clone 干净，先在临时 clone 中通过数据校验与完整测试，再执行 `merge --ff-only`。它不会自动 stash、reset、rebase，也不需要 reinstall。
+`--check` 只 fetch 和报告，`reinstall_required_after_update=true` 仅预告成功更新后需要同步链接，不会立即 install。实际更新要求 clone 干净，先在临时 clone 中通过数据校验与完整测试，再执行 `merge --ff-only`。它不会自动 stash、reset、rebase。更新后只有实际 skill 链接不一致时才需要幂等 install。
 
-在其他工作仓发现 WudiTask 自身需要修改时，使用 `/wuditask selfupdate fix "问题描述"`（Codex 使用 `$wuditask selfupdate fix ...`）。skill 会在 WudiTask 中创建维护任务，并使用 `~/.wuditask/worktrees/<task-id>` 隔离开发，完成后普通 push、更新安装 clone、归档维护任务，再返回原仓。
+在其他工作仓发现 WudiTask 自身需要修改时，使用 `/wuditask-selfupdate fix "问题描述"`（Codex 使用 `$wuditask-selfupdate fix ...`）。skill 会保存原仓现场，从 `origin/main` 创建 `~/.wuditask/worktrees/<slug>` 与 `codex/<slug>` 隔离开发，完成后测试、普通 push、更新安装 clone 并同步 skill 链接，再返回原仓。这个直接维护流程不会为了描述修复而创建 GitHub Issue，也不会添加、领取或归档 WudiTask 任务；只有无法直推或需要评审时才创建 PR。
 
 ## 日常命令
 
-在任意工作仓库中添加任务。省略 `--repo` 时会读取当前仓库的 GitHub origin：
+在任意工作仓库中添加任务。若有明确的归属 GitHub 仓库，`$wuditask-add` 或 `/wuditask-add` 会优先复用匹配的 open Issue/PR；没有时在该仓创建 Issue，以其作为完整问题描述，并通过 `--link` 写入任务。WudiTask 的 goal/context/acceptance 只保留精简执行合同。没有合适仓库承载 Issue/PR 时才使用完整文本描述，但 schema v1 仍要求指定执行仓库。
+
+省略 `--repo` 时 CLI 会读取当前仓库的 GitHub origin：
 
 ```bash
 wuditask add \
@@ -88,6 +103,7 @@ wuditask add \
   --context "Preserve the current public API" \
   --accept "Malformed files return HTTP 400" \
   --verify "command::python3 -m unittest tests.test_upload" \
+  --link "https://github.com/acme/api/issues/42" \
   --priority P1
 ```
 

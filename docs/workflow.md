@@ -51,13 +51,17 @@ install skill 调用同仓 Python：
 python3 tools/wuditask.py --json install
 ```
 
-安装结果只做路径注册与 symlink，不执行 pip/npm 安装，也不复制 skill。clone 保持原路径时，`git pull` 会立即更新 Codex、Claude 和 CLI，无需重新 install；clone 移动后才必须重新运行。若目标 skill 路径已有其他内容，默认停止；只有用户确认后才使用 `--replace`，旧内容会改名保留为 backup。
+安装结果只做路径注册与 symlink，不执行 pip/npm 安装，也不复制 skill。installer 自动发现 `.agents/skills/` 下包含 `SKILL.md` 的直接子目录，并把完整 suite 分别链接给 Codex 与 Claude。clone 保持原路径时，既有 skill 内容随更新立即生效；只有更新改变 skill 目录清单、clone 移动或链接损坏时才需要重新运行幂等 install。若目标 skill 路径已有其他内容，默认停止；只有用户确认后才使用 `--replace`，旧内容会改名保留为 backup。
 
 ### 更新 WudiTask 本体
 
-`/wuditask selfupdate`（Codex 为 `$wuditask selfupdate`）用于升级已安装 clone。CLI 先 fetch 并检查 Git 关系；只有 worktree 干净且本地可 fast-forward 时，才在临时 clone 中校验候选数据并运行完整测试，随后 `merge --ff-only`。dirty、local-ahead、diverged 或候选测试失败都保持当前版本不变，且不会自动 stash/reset/rebase。
+`/wuditask-selfupdate`（Codex 为 `$wuditask-selfupdate`）用于升级已安装 clone。CLI 先 fetch 并检查 Git 关系；只有 worktree 干净且本地可 fast-forward 时，才在临时 clone 中校验候选数据并运行完整测试，随后 `merge --ff-only`。dirty、local-ahead、diverged 或候选测试失败都保持当前版本不变，且不会自动 stash/reset/rebase。`--check` 只报告，`reinstall_required_after_update=true` 仅预告更新后的链接同步。非 check 结果为 `updated`/`up_to_date` 且 `reinstall_required=true` 时，skill 无 `--replace` 地运行一次 installer；它补齐链接，并只删除仍指向本 clone 的过期 skill symlink，遇到其他目标冲突则停止而不覆盖。
 
-若用户在另一个工作仓发现 WudiTask 缺陷，使用 `/wuditask selfupdate fix <问题>`。agent 将原仓现场保持不动，在 Task Hub 中添加并领取一个面向 WudiTask 仓库的维护任务，然后在 `~/.wuditask/worktrees/<task-id>` 隔离实现。修复通过测试并普通 push 到 main 后，agent 更新安装 clone、带 evidence 归档维护任务、清理 worktree，再返回原仓继续原任务。
+从旧的双 skill 安装首次升级时，第一次更新仍由旧进程完成，无法返回新的链接提示；更新后必须用仍可用的 `$wuditask-install` 或 `/wuditask-install` 幂等运行一次，完成 operation-specific suite 迁移。
+
+若用户在另一个工作仓发现 WudiTask 缺陷，使用 `/wuditask-selfupdate fix <问题>`（Codex 为 `$wuditask-selfupdate fix <问题>`）。agent 保持原仓现场与活动任务状态不变，更新 installed clone，然后从 `origin/main` 创建 `~/.wuditask/worktrees/<unique-slug>` 和 `codex/<slug>` 隔离实现。修复通过完整测试后普通 push 到 main；main 移动时只 rebase agent 创建的分支并重测，绝不 force-push。没有直推权限或需要评审时才推分支并创建 PR。变更进入 main 后，agent 更新 installed clone、按需同步 skill 链接、清理 worktree，再返回原仓。
+
+这个 fix 是直接仓库维护，不是共享任务：不得为了描述它而创建 GitHub Issue，也不得调用 WudiTask `add`、`execute`、`archive` 或 `release`。`fix` 是 agent 工作流关键词，不是 CLI 参数。
 
 ## 2. 添加任务
 
@@ -65,13 +69,15 @@ python3 tools/wuditask.py --json install
 
 > 添加一个任务：上传接口必须在写对象存储前拒绝格式错误的文件。
 
-agent 使用 `wuditask` skill：
+agent 使用 `$wuditask-add`（Claude 为 `/wuditask-add`）：
 
 1. 读取当前工作仓库 `git remote get-url origin`。
-2. 收集 title、goal、context、acceptance criteria、verification、priority、dependencies 与 links。
-3. 不清楚验收标准时先询问用户，不凭空定义“完成”。
-4. 调用 `add --json`。
-5. 只有普通 push 确认后才向用户报告任务 ID。
+2. 先收集完整问题叙述，以及精简的 title、goal、context、acceptance criteria、verification、priority 与 dependencies；不清楚时先询问用户，不凭空定义“完成”。
+3. 只有叙述和执行合同充分后，才在明确的归属仓库复用匹配的 open PR/open Issue，或按该仓 Issue template 创建 Issue，并把 URL 放入 `links`。
+4. 以 Issue/PR 作为完整问题叙述，WudiTask 字段只保留精简执行合同。
+5. 调用 `add --json`，只有普通 push 确认后才向用户报告任务 ID。
+
+不得在 Task Hub 创建 Issue 来描述属于其他仓库的工作，也不得创建空 PR 充当说明。归属仓库适合承载 Issue 但创建失败时应停止并报告，不能静默降级为文本。只有确实没有合适 GitHub 仓库承载叙述时，才在 WudiTask 文本字段保留完整描述并在 `context` 记录原因；schema v1 仍要求一个实际执行仓库，不能虚构。
 
 最低信息：
 
@@ -86,7 +92,7 @@ agent 使用 `wuditask` skill：
 
 ## 3. 领取并执行任务
 
-用户进入某个工作仓库并要求 agent 处理下一项任务。agent：
+用户进入某个工作仓库并要求 agent 处理下一项任务。`$wuditask-execute`（Claude 为 `/wuditask-execute`）执行：
 
 1. 确认当前仓库没有会被意外覆盖的本地工作。
 2. 调用 `wuditask execute`，不传 ID 时按 P0 到 P3、创建时间、ID 排序。
@@ -132,6 +138,8 @@ agent 应把 task 的以下内容当作执行合同：
 
 ## 4. 依赖检查
 
+使用 `$wuditask-dep-check`（Claude 为 `/wuditask-dep-check`）。这是纯读工作流。
+
 依赖检查有四层：
 
 1. `add`：拒绝不存在的依赖 ID。
@@ -164,7 +172,7 @@ wuditask --json dep-check WDT-20260711T120000Z-A1B2C3
 
 ## 5. 验收与归档
 
-agent 在工作仓库完成实现后：
+agent 在工作仓库完成实现后，使用 `$wuditask-archive`（Claude 为 `/wuditask-archive`）：
 
 1. 逐条执行 task 中的 verification。
 2. 保留可复核证据，例如命令、测试数量、commit/PR、文件路径或人工观察。
@@ -201,6 +209,8 @@ failed/cancelled 永远不会解除下游依赖。作者应重新规划下游任
 
 ## 6. 释放任务
 
+使用 `$wuditask-release`（Claude 为 `/wuditask-release`）。
+
 owner 暂时无法继续、任务领错仓库或需要重新排队时：
 
 ```bash
@@ -209,7 +219,11 @@ wuditask release TASK_ID --reason "Waiting for product decision"
 
 release 只允许当前 GitHub owner 操作。原因进入命令结果与 Git commit message；任务文件恢复为 owner/claim 均为空。长期审计由 Git 历史保留。
 
-## 7. Pages 使用
+## 7. 检查任务状态
+
+`$wuditask-inspect`（Claude 为 `/wuditask-inspect`）只运行 `list` 或 `show`，用于查看 open/archive、仓库、owner、优先级、详情和最终结果，不修改任务。依赖就绪性分析交给 `wuditask-dep-check`。
+
+## 8. Pages 使用
 
 人类打开 GitHub Pages 可以：
 

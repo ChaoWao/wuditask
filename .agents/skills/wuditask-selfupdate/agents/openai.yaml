@@ -1,0 +1,4 @@
+interface:
+  display_name: "Update WudiTask"
+  short_description: "Update or directly maintain the WudiTask tool"
+  default_prompt: "Use $wuditask-selfupdate to update the installed WudiTask clone or fix WudiTask itself."

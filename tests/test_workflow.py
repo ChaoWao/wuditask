@@ -26,6 +26,10 @@ class WorkflowTests(unittest.TestCase):
             self.assertTrue(claimed["confirmed"])
             self.assertEqual("alice", claimed["task"]["owner"]["login"])
 
+            retried = claim_task(repository, ACTOR, task_id=PARENT_ID)
+            self.assertTrue(retried["already_claimed"])
+            self.assertTrue(retried["dependency_check"]["ready"])
+
             with self.assertRaises(WudiTaskError) as missing:
                 archive_task(
                     repository,

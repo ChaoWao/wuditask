@@ -109,6 +109,10 @@ class CliTests(unittest.TestCase):
         self.assertEqual(
             "/wuditask help [topic]", payload["agent_invocation"]["claude"]
         )
+        self.assertEqual(
+            "$wuditask-archive",
+            payload["commands"][0]["agent_usage"]["codex"],
+        )
 
         selfupdate = subprocess.run(
             [sys.executable, str(TOOL), "--json", "help", "selfupdate"],
@@ -120,9 +124,72 @@ class CliTests(unittest.TestCase):
         self.assertEqual(0, selfupdate.returncode, selfupdate.stderr)
         selfupdate_payload = json.loads(selfupdate.stdout)
         self.assertEqual(
-            "/wuditask selfupdate fix <request>",
+            "/wuditask-selfupdate fix <request>",
+            selfupdate_payload["commands"][0]["agent_usage"]["claude_fix"],
+        )
+        self.assertEqual(
+            "/wuditask-selfupdate fix <request>",
             selfupdate_payload["commands"][0]["agent_usage"]["fix"],
         )
+        self.assertTrue(
+            any(
+                "does not create an Issue or queue task" in note
+                for note in selfupdate_payload["notes"]
+            )
+        )
+
+        add = subprocess.run(
+            [sys.executable, str(TOOL), "--json", "help", "add"],
+            cwd=ROOT,
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(0, add.returncode, add.stderr)
+        add_payload = json.loads(add.stdout)
+        self.assertEqual(
+            "$wuditask-add", add_payload["commands"][0]["agent_usage"]["codex"]
+        )
+        self.assertIn("--link ISSUE_OR_PR_URL", add_payload["commands"][0]["usage"])
+
+    def test_help_routes_every_operation_to_a_dedicated_skill(self) -> None:
+        routes = {
+            "add": ("codex", "$wuditask-add"),
+            "execute": ("codex", "$wuditask-execute"),
+            "dep-check": ("codex", "$wuditask-dep-check"),
+            "archive": ("codex", "$wuditask-archive"),
+            "release": ("codex", "$wuditask-release"),
+            "list": ("codex", "$wuditask-inspect"),
+            "show": ("codex", "$wuditask-inspect"),
+            "install": ("codex", "$wuditask-install"),
+            "selfupdate": ("codex_update", "$wuditask-selfupdate"),
+        }
+        for topic, (key, invocation) in routes.items():
+            with self.subTest(topic=topic):
+                result = subprocess.run(
+                    [sys.executable, str(TOOL), "--json", "help", topic],
+                    cwd=ROOT,
+                    check=False,
+                    capture_output=True,
+                    text=True,
+                )
+                self.assertEqual(0, result.returncode, result.stderr)
+                payload = json.loads(result.stdout)
+                self.assertEqual(
+                    invocation,
+                    payload["commands"][0]["agent_usage"][key],
+                )
+
+        text_help = subprocess.run(
+            [sys.executable, str(TOOL), "help", "selfupdate"],
+            cwd=ROOT,
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(0, text_help.returncode, text_help.stderr)
+        self.assertIn("$wuditask-selfupdate fix <request>", text_help.stdout)
+        self.assertIn("does not create an Issue or queue task", text_help.stdout)
 
 
 if __name__ == "__main__":

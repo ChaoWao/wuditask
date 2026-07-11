@@ -1,6 +1,6 @@
 ---
 name: wuditask-install
-description: Register a cloned WudiTask repository for Codex and Claude agents on the current machine. Use when a user asks to install, set up, register, relocate, repair, or update WudiTask access, or when the operational wuditask skill reports a missing or stale ~/.wuditask/config.json path.
+description: Register the complete WudiTask skill suite and CLI symlinks for Codex and Claude from a cloned WudiTask repository. Use when a user asks to install, set up, register, relocate, repair, or reconcile WudiTask access, or when any WudiTask skill reports missing or stale configuration or links.
 ---
 
 # Install WudiTask
@@ -9,10 +9,10 @@ Register this clone by running its own Python installer. Do not pip/npm install 
 
 ## Resolve the clone
 
-1. Prefer the current Git repository root when it contains both `tools/wuditask.py` and `.agents/skills/wuditask`.
+1. Prefer the current Git repository root when it contains `tools/wuditask.py` and `.agents/skills/`.
 2. Otherwise resolve this SKILL.md's real path and walk upward to the directory containing `tools/wuditask.py`.
 3. For repair after a move, use the new clone path supplied by the user.
-4. Refuse a directory that lacks the tool or both WudiTask skills.
+4. Refuse a directory that lacks the tool or any required WudiTask skill.
 
 ## Register
 
@@ -25,10 +25,12 @@ python3 HUB/tools/wuditask.py --hub HUB --json install
 Confirm the JSON reports:
 
 - `~/.wuditask/config.json` with the absolute hub path;
-- `wuditask` and `wuditask-install` links under both `~/.agents/skills` and `~/.claude/skills`;
+- the complete reported skill suite linked under both `~/.agents/skills` and `~/.claude/skills`;
 - `~/.local/bin/wuditask` linked to the repository's Python entry point.
 
-These are symbolic links, not copied files. Prefer `/wuditask selfupdate` or `$wuditask selfupdate` for verified future updates; a normal `git pull` in the same clone also updates both products immediately. Do not reinstall after updates. If a long-running agent session has cached old instructions, reopen the session instead. Reinstall only when the clone moves, is replaced at another path, or a link is damaged.
+These are symbolic links, not copied files. Prefer `/wuditask-selfupdate` or `$wuditask-selfupdate` for verified future updates. Existing skill content updates immediately through the symlinks. After a non-check self-update reports `reinstall_required=true`, run this installer once without `--replace` to reconcile the suite. It removes a stale skill link only when that symlink still targets this clone; it never deletes unrelated skills or regular files. Also reinstall when the clone moves, is replaced at another path, or a link is damaged. If a long-running agent session has cached old instructions, reopen the session afterward.
+
+Migration note: a first update from a version that installed only `wuditask` and `wuditask-install` runs the old updater process, so it cannot report the newly added sibling links after merging. Run this installer once after that update before using the operation-specific names.
 
 If `launcher_on_path` is false, mention the launcher path; agents can still call the absolute Python entry point from config.
 

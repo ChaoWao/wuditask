@@ -1,0 +1,4 @@
+interface:
+  display_name: "Inspect WudiTask"
+  short_description: "List and inspect shared WudiTask state"
+  default_prompt: "Use $wuditask-inspect to show the current shared WudiTask state."

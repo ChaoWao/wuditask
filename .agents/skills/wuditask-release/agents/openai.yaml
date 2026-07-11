@@ -1,0 +1,4 @@
+interface:
+  display_name: "Release WudiTask"
+  short_description: "Return owned work safely to the shared queue"
+  default_prompt: "Use $wuditask-release to return this claimed task to the shared queue."

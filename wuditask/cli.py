@@ -29,42 +29,78 @@ from .workflow import archive_task, claim_task, create_task, release_task
 HELP_COMMANDS = {
     "add": {
         "purpose": "Add a fully specified task for a GitHub work repository.",
-        "usage": "wuditask add --title TEXT --goal TEXT --accept TEXT [--verify type::value] [--depends TASK_ID]",
+        "usage": "wuditask add --title TEXT --goal TEXT --accept TEXT [--verify type::value] [--link ISSUE_OR_PR_URL] [--depends TASK_ID]",
+        "agent_usage": {
+            "codex": "$wuditask-add",
+            "claude": "/wuditask-add",
+        },
     },
     "execute": {
         "purpose": "Claim one unowned task whose dependencies are complete.",
         "usage": "wuditask execute [TASK_ID] [--repo owner/name]",
+        "agent_usage": {
+            "codex": "$wuditask-execute",
+            "claude": "/wuditask-execute",
+        },
     },
     "dep-check": {
         "purpose": "Expand dependencies and explain whether work is ready.",
         "usage": "wuditask dep-check [TASK_ID]",
+        "agent_usage": {
+            "codex": "$wuditask-dep-check",
+            "claude": "/wuditask-dep-check",
+        },
     },
     "archive": {
         "purpose": "Archive claimed work with an outcome and acceptance evidence.",
         "usage": "wuditask archive TASK_ID --outcome done --result TEXT --evidence AC-N=TEXT",
+        "agent_usage": {
+            "codex": "$wuditask-archive",
+            "claude": "/wuditask-archive",
+        },
     },
     "release": {
         "purpose": "Return a task owned by the current GitHub user to the queue.",
         "usage": "wuditask release TASK_ID --reason TEXT",
+        "agent_usage": {
+            "codex": "$wuditask-release",
+            "claude": "/wuditask-release",
+        },
     },
     "list": {
         "purpose": "List open, archived, or all tasks.",
         "usage": "wuditask list [--scope open|archive|all] [--repo owner/name]",
+        "agent_usage": {
+            "codex": "$wuditask-inspect",
+            "claude": "/wuditask-inspect",
+        },
     },
     "show": {
         "purpose": "Show one task and its derived dependency state.",
         "usage": "wuditask show TASK_ID",
+        "agent_usage": {
+            "codex": "$wuditask-inspect",
+            "claude": "/wuditask-inspect",
+        },
     },
     "install": {
         "purpose": "Register this clone through symlinks for Codex and Claude.",
         "usage": "wuditask install [--home PATH] [--replace]",
+        "agent_usage": {
+            "codex": "$wuditask-install",
+            "claude": "/wuditask-install",
+        },
     },
     "selfupdate": {
-        "purpose": "Safely verify and fast-forward the installed WudiTask clone.",
+        "purpose": "Safely update the installed clone or directly maintain WudiTask.",
         "usage": "wuditask selfupdate [--check]",
         "agent_usage": {
-            "update": "/wuditask selfupdate",
-            "fix": "/wuditask selfupdate fix <request>",
+            "update": "/wuditask-selfupdate",
+            "fix": "/wuditask-selfupdate fix <request>",
+            "codex_update": "$wuditask-selfupdate",
+            "claude_update": "/wuditask-selfupdate",
+            "codex_fix": "$wuditask-selfupdate fix <request>",
+            "claude_fix": "/wuditask-selfupdate fix <request>",
         },
     },
 }
@@ -310,6 +346,9 @@ def _help(topic: str | None) -> dict[str, Any]:
         "workflow": workflow,
         "commands": [{"name": name, **details} for name, details in selected.items()],
         "notes": [
+            "Use the operation-specific agent skill shown for each command; $wuditask and /wuditask are the help router.",
+            "For add, use a matching GitHub Issue or PR as the canonical narrative when the owning repository is clear.",
+            "Selfupdate fix directly maintains WudiTask in an isolated worktree; it does not create an Issue or queue task.",
             "Run commands from the target work repository so owner/name can be detected from origin.",
             "Remote writes use the human identity from gh api user.",
             "Never start work until execute returns confirmed=true and sync.confirmed=true.",
@@ -410,6 +449,8 @@ def _text(result: dict[str, Any]) -> str:
             lines.append(f"  {command['name']}: {command['purpose']}")
             lines.append(f"    {command['usage']}")
             for mode, invocation in command.get("agent_usage", {}).items():
+                if command["name"] == "selfupdate" and mode in {"update", "fix"}:
+                    continue
                 lines.append(f"    {mode}: {invocation}")
         lines.extend(
             [
@@ -419,6 +460,10 @@ def _text(result: dict[str, Any]) -> str:
                 f"  Claude: {result['agent_invocation']['claude']}",
             ]
         )
+        if result.get("notes"):
+            lines.extend(["", "Notes"])
+            for note in result["notes"]:
+                lines.append(f"  {note}")
         return "\n".join(lines)
     if isinstance(result.get("message"), str):
         return result["message"]

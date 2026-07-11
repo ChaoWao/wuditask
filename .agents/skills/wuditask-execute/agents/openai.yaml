@@ -1,0 +1,4 @@
+interface:
+  display_name: "Execute WudiTask"
+  short_description: "Claim and start ready WudiTask work safely"
+  default_prompt: "Use $wuditask-execute to claim and start the next ready task for this repository."

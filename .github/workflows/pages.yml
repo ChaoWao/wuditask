@@ -11,6 +11,9 @@ on:
       - "wuditask/**"
       - "tools/wuditask.py"
       - "tests/**"
+      - ".agents/skills/**"
+      - "README.md"
+      - "docs/**"
       - "pyproject.toml"
       - ".github/workflows/pages.yml"
   schedule:

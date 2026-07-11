@@ -76,6 +76,63 @@ def _worktree_changes(root: Path) -> list[str]:
     return [line for line in output.splitlines() if line]
 
 
+def _skill_inventory(root: Path, revision: str) -> list[str]:
+    output = _run(
+        [
+            "git",
+            "ls-tree",
+            "-r",
+            "--name-only",
+            revision,
+            "--",
+            ".agents/skills",
+        ],
+        cwd=root,
+    ).stdout
+    names = set()
+    for line in output.splitlines():
+        parts = Path(line).parts
+        if (
+            len(parts) == 4
+            and parts[:2] == (".agents", "skills")
+            and not parts[2].startswith(".")
+            and parts[-1] == "SKILL.md"
+        ):
+            names.add(parts[2])
+    return sorted(names)
+
+
+def _symlink_target(path: Path) -> Path | None:
+    if not path.is_symlink():
+        return None
+    target = Path(os.readlink(path))
+    if not target.is_absolute():
+        target = path.parent / target
+    return target.resolve(strict=False)
+
+
+def _skill_links_need_reinstall(root: Path, revision: str, home: Path) -> bool:
+    skills_root = (root / ".agents" / "skills").resolve()
+    expected_names = set(_skill_inventory(root, revision))
+    for product_path in (home / ".agents" / "skills", home / ".claude" / "skills"):
+        for name in expected_names:
+            destination = product_path / name
+            if _symlink_target(destination) != (skills_root / name).resolve():
+                return True
+        if not product_path.is_dir():
+            continue
+        for destination in product_path.iterdir():
+            target = _symlink_target(destination)
+            if (
+                target is not None
+                and target.parent == skills_root
+                and target.name == destination.name
+                and destination.name not in expected_names
+            ):
+                return True
+    return False
+
+
 def _candidate_verification(checkout: Path) -> dict[str, Any]:
     tool = checkout / "tools" / "wuditask.py"
     tests = checkout / "tests"
@@ -139,8 +196,14 @@ def _candidate_verification(checkout: Path) -> dict[str, Any]:
     }
 
 
-def self_update(hub_root: Path, *, check_only: bool = False) -> dict[str, Any]:
+def self_update(
+    hub_root: Path,
+    *,
+    check_only: bool = False,
+    home: Path | None = None,
+) -> dict[str, Any]:
     root = hub_root.expanduser().resolve()
+    home = (home or Path.home()).expanduser().resolve()
     top_level = Path(_git_value(root, "rev-parse", "--show-toplevel")).resolve()
     if top_level != root:
         raise WudiTaskError(
@@ -167,6 +230,10 @@ def self_update(hub_root: Path, *, check_only: bool = False) -> dict[str, Any]:
     local_head = _git_value(root, "rev-parse", "HEAD")
     remote_ref = f"origin/{branch}"
     remote_head = _git_value(root, "rev-parse", remote_ref)
+    local_reinstall_required = _skill_links_need_reinstall(root, local_head, home)
+    update_changes_skill_inventory = _skill_inventory(
+        root, local_head
+    ) != _skill_inventory(root, remote_head)
     commit_count = int(
         _git_value(root, "rev-list", "--count", f"{local_head}..{remote_head}")
     )
@@ -190,7 +257,8 @@ def self_update(hub_root: Path, *, check_only: bool = False) -> dict[str, Any]:
             "remote": remote,
             "commit": local_head,
             "worktree_clean": not changes,
-            "reinstall_required": False,
+            "reinstall_required": local_reinstall_required,
+            "reinstall_required_after_update": False,
         }
     if not _is_ancestor(root, local_head, remote_head):
         state = (
@@ -206,7 +274,8 @@ def self_update(hub_root: Path, *, check_only: bool = False) -> dict[str, Any]:
                 "local_commit": local_head,
                 "remote_commit": remote_head,
                 "worktree_clean": not changes,
-                "reinstall_required": False,
+                "reinstall_required": local_reinstall_required,
+                "reinstall_required_after_update": update_changes_skill_inventory,
             }
         raise WudiTaskError(
             f"selfupdate_{state}",
@@ -232,7 +301,10 @@ def self_update(hub_root: Path, *, check_only: bool = False) -> dict[str, Any]:
             "commit_count": commit_count,
             "commits": commits,
             "worktree_clean": not changes,
-            "reinstall_required": False,
+            "reinstall_required": local_reinstall_required,
+            "reinstall_required_after_update": (
+                local_reinstall_required or update_changes_skill_inventory
+            ),
         }
 
     verification: dict[str, Any] = {}
@@ -285,7 +357,11 @@ def self_update(hub_root: Path, *, check_only: bool = False) -> dict[str, Any]:
             exit_code=3,
         )
 
+    update_changes_skill_inventory = _skill_inventory(
+        root, local_head
+    ) != _skill_inventory(root, candidate_head)
     _run(["git", "merge", "--ff-only", candidate_head], cwd=root)
+    reinstall_required = _skill_links_need_reinstall(root, candidate_head, home)
     return {
         "message": f"Updated WudiTask from {local_head[:7]} to {candidate_head[:7]}.",
         "status": "updated",
@@ -297,5 +373,7 @@ def self_update(hub_root: Path, *, check_only: bool = False) -> dict[str, Any]:
         "commit_count": commit_count,
         "commits": commits,
         "verification": verification,
-        "reinstall_required": False,
+        "reinstall_required": reinstall_required,
+        "reinstall_required_after_update": reinstall_required,
+        "skill_inventory_changed": update_changes_skill_inventory,
     }

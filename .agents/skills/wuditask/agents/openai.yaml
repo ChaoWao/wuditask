@@ -1,4 +1,4 @@
 interface:
   display_name: "WudiTask"
-  short_description: "Manage distributed GitHub-backed work tasks"
-  default_prompt: "Use $wuditask to add, claim, check, or archive a shared task."
+  short_description: "Explain WudiTask and route task operations"
+  default_prompt: "Use $wuditask to explain the workflow or choose the right WudiTask operation skill."

@@ -201,6 +201,7 @@ def claim_task(
                     "confirmed": True,
                     "already_claimed": True,
                     "changed": False,
+                    "dependency_check": dependency_report(index, task_id)["task"],
                     "message": f"{task_id} is already claimed by {actor.login}.",
                 }
             raise WudiTaskError(

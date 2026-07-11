@@ -9,6 +9,19 @@ from .errors import WudiTaskError
 from .util import atomic_write_json, utc_now
 
 
+REQUIRED_SKILL_NAMES = {
+    "wuditask",
+    "wuditask-add",
+    "wuditask-archive",
+    "wuditask-dep-check",
+    "wuditask-execute",
+    "wuditask-inspect",
+    "wuditask-install",
+    "wuditask-release",
+    "wuditask-selfupdate",
+}
+
+
 def _git_value(root: Path, *arguments: str) -> str | None:
     process = subprocess.run(
         ["git", *arguments],
@@ -52,6 +65,38 @@ def _link(source: Path, destination: Path, *, replace: bool) -> dict[str, Any]:
     return result
 
 
+def _symlink_target(path: Path) -> Path | None:
+    if not path.is_symlink():
+        return None
+    target = Path(os.readlink(path))
+    if not target.is_absolute():
+        target = path.parent / target
+    return target.resolve(strict=False)
+
+
+def _remove_stale_skill_links(
+    skills_root: Path,
+    product_path: Path,
+    skill_names: set[str],
+) -> list[dict[str, str]]:
+    if not product_path.is_dir():
+        return []
+    resolved_skills_root = skills_root.resolve()
+    removed = []
+    for destination in product_path.iterdir():
+        target = _symlink_target(destination)
+        if (
+            target is None
+            or target.parent != resolved_skills_root
+            or target.name != destination.name
+            or destination.name in skill_names
+        ):
+            continue
+        destination.unlink()
+        removed.append({"path": str(destination), "target": str(target)})
+    return removed
+
+
 def install_agent_access(
     hub_root: Path,
     *,
@@ -61,28 +106,50 @@ def install_agent_access(
     hub_root = hub_root.resolve()
     home = (home or Path.home()).resolve()
     tool = hub_root / "tools" / "wuditask.py"
-    operational_skill = hub_root / ".agents" / "skills" / "wuditask"
-    installer_skill = hub_root / ".agents" / "skills" / "wuditask-install"
-    for required in (
-        tool,
-        operational_skill / "SKILL.md",
-        installer_skill / "SKILL.md",
-    ):
-        if not required.exists():
-            raise WudiTaskError(
-                "invalid_hub_clone",
-                f"WudiTask clone is missing {required.relative_to(hub_root)}.",
-                details={"hub_path": str(hub_root)},
-            )
+    skills_root = hub_root / ".agents" / "skills"
+    if not tool.is_file():
+        raise WudiTaskError(
+            "invalid_hub_clone",
+            "WudiTask clone is missing tools/wuditask.py.",
+            details={"hub_path": str(hub_root)},
+        )
+    if not skills_root.is_dir():
+        raise WudiTaskError(
+            "invalid_hub_clone",
+            "WudiTask clone is missing .agents/skills.",
+            details={"hub_path": str(hub_root)},
+        )
+
+    skills = sorted(
+        (
+            path
+            for path in skills_root.iterdir()
+            if path.is_dir()
+            and not path.name.startswith(".")
+            and (path / "SKILL.md").is_file()
+        ),
+        key=lambda path: path.name,
+    )
+    skill_names = {path.name for path in skills}
+    missing_skill_names = sorted(REQUIRED_SKILL_NAMES - skill_names)
+    if missing_skill_names:
+        raise WudiTaskError(
+            "invalid_hub_clone",
+            "WudiTask clone is missing required agent skills.",
+            details={
+                "hub_path": str(hub_root),
+                "missing_skills": missing_skill_names,
+            },
+        )
 
     links = []
+    removed_links = []
     for product_path in (home / ".agents" / "skills", home / ".claude" / "skills"):
-        links.append(
-            _link(operational_skill, product_path / "wuditask", replace=replace)
+        removed_links.extend(
+            _remove_stale_skill_links(skills_root, product_path, skill_names)
         )
-        links.append(
-            _link(installer_skill, product_path / "wuditask-install", replace=replace)
-        )
+        for skill in skills:
+            links.append(_link(skill, product_path / skill.name, replace=replace))
     launcher = _link(tool, home / ".local" / "bin" / "wuditask", replace=replace)
     links.append(launcher)
 
@@ -103,7 +170,9 @@ def install_agent_access(
         "message": f"Registered WudiTask clone at {hub_root}.",
         "config": str(config_path),
         "hub_path": str(hub_root),
+        "skills": [skill.name for skill in skills],
         "links": links,
+        "removed_links": removed_links,
         "launcher": str(home / ".local" / "bin" / "wuditask"),
         "launcher_on_path": launcher_on_path,
     }
