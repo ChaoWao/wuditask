@@ -86,9 +86,15 @@ wuditask archive WDT-20260711T120000Z-A1B2C3 \
 
 ## GitHub Pages
 
-在仓库 Settings > Pages 中把 Source 设为 **GitHub Actions**。每次任务变化会先执行 `validate`，再生成 `_site` artifact 并部署；每小时还有一次安全刷新。页面每 60 秒读取一次最新 snapshot。
+每次任务变化都会执行 `validate`、测试和静态构建。要发布 Pages，在仓库 Settings > Pages 中把 Source 设为 **GitHub Actions**，再创建仓库变量 `WUDITASK_PAGES_ENABLED=true`。之后每次 push 自动部署，每小时还有一次安全刷新；页面每 60 秒读取一次最新 snapshot。
 
-私有仓库是否能启用 Pages 取决于 GitHub 方案。个人 Pro、Team 或 Enterprise 通常可以从私有仓库发布 Pages，但“源仓库私有”不代表“站点私有”；一般站点仍然公开。只有具备相应 Enterprise Cloud 组织访问控制时，才应把 Pages 当作受限站点。初次演练建议使用脱敏任务。
+```bash
+gh variable set WUDITASK_PAGES_ENABLED --body true --repo OWNER/wuditask
+```
+
+未设置该变量时，private 实践仓仍会完成校验和构建，但跳过 Pages 上传与部署，不产生错误的红色 workflow。
+
+私有仓库是否能启用 Pages 取决于 GitHub 方案。个人 Pro、Team 或 Enterprise 通常可以从私有仓库发布 Pages；GitHub Free 的个人 private 仓不能启用。“源仓库私有”也不代表“站点私有”，一般站点仍然公开。只有具备相应 Enterprise Cloud 组织访问控制时，才应把 Pages 当作受限站点。初次演练建议使用脱敏任务。
 
 ## 为什么不是 todo.txt
 

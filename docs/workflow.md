@@ -17,9 +17,12 @@
 1. 创建 GitHub 仓库，首次演练可使用 private。
 2. 推送本仓库内容到默认分支 `main`。
 3. 配置协作者普通 push 权限，并明确禁止 force push 与删除默认分支。
-4. 在 Settings > Pages 中选择 GitHub Actions。
-5. 确认 Pages 的实际可见性；若没有 Enterprise 私有 Pages，使用脱敏任务。
-6. 等待 `Deploy WudiTask Pages` 成功。
+4. 确认当前方案允许从该仓库发布 Pages；GitHub Free 的个人 private 仓不允许。
+5. 在 Settings > Pages 中选择 GitHub Actions，并创建仓库变量 `WUDITASK_PAGES_ENABLED=true`。
+6. 确认 Pages 的实际可见性；若没有 Enterprise 私有 Pages，使用脱敏任务。
+7. 等待 `Deploy WudiTask Pages` 成功。
+
+未设置变量时，workflow 仍执行 schema 校验、测试和静态构建，但跳过 Pages 上传与部署。这是 private/Free 演练的正常模式。
 
 部署验收：
 

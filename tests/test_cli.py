@@ -58,6 +58,8 @@ class CliTests(unittest.TestCase):
                 hub,
                 "execute",
                 "WDT-20260711T120000Z-A1B2C3",
+                "--repo",
+                "acme/service",
             )
             self.assertEqual(0, claimed.returncode, claimed.stderr)
             claim_payload = json.loads(claimed.stdout)
