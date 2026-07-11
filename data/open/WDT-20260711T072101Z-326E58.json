@@ -1,0 +1,64 @@
+{
+  "schema_version": 1,
+  "id": "WDT-20260711T072101Z-326E58",
+  "title": "Implement lightweight selective task timing slots (#1325)",
+  "repo": "hw-native-sys/simpler",
+  "created_by": {
+    "login": "ChaoWao",
+    "github_id": 26245345
+  },
+  "owner": null,
+  "priority": "P1",
+  "created_at": "2026-07-11T07:21:01Z",
+  "goal": "Implement 16 fixed per-run task timing slots that let orchestration tag selected L2 tasks and let Scheduler report earliest DATA_MAIN_BASE dispatch through latest Scheduler-observed FIN via the existing device-phase H2D/D2H and STRACE path, without enabling L2 swimlane.",
+  "context": [
+    "GitHub issue https://github.com/hw-native-sys/simpler/issues/1325 contains the code analysis and contract. Preserve the PTO2RuntimeOps ABI; prefer L0TaskArgs metadata copied into RT2 descriptor padding, with a compatibility path for legacy a5 host_build_graph. Use per-Scheduler-thread TaskTimingRecord[16] storage and host min(dispatch)/max(finish) reduction. Support duplicate slot IDs as one aggregated window, early/pending dispatch at initial DATA_MAIN_BASE publication, FIN before fanout/deferred processing, per-run reset, stable clk=dev STRACE task_slot_N markers, a2a3/a5, onboard/sim, both runtimes, and SIMPLER_DFX=0. Do not add a new env var/macro, hot-path logging, atomics across Scheduler threads, barriers, or L2 collector dependencies."
+  ],
+  "acceptance_criteria": [
+    {
+      "id": "AC-1",
+      "description": "Orchestration APIs on a2a3/a5 and both runtime variants accept slot IDs 0..15, default to an untagged sentinel, reject out-of-range IDs through the existing invalid-args path, propagate the tag to Scheduler without changing PTO2RuntimeOps ABI, and preserve guarded task/descriptor layouts.",
+      "verification": {
+        "type": "command",
+        "value": "cmake -B tests/ut/cpp/build -S tests/ut/cpp && cmake --build tests/ut/cpp/build && ctest --test-dir tests/ut/cpp/build -LE requires_hardware --output-on-failure"
+      }
+    },
+    {
+      "id": "AC-2",
+      "description": "With L2 swimlane disabled, focused normal-chain, MIX, and multi-block SPMD tests produce stable device-clock task_slot_N spans whose start is the earliest tagged DATA_MAIN_BASE publication and whose end is the latest tagged Scheduler-observed FIN across Scheduler threads; duplicate tags aggregate one window and incomplete slots are skipped.",
+      "verification": {
+        "type": "command",
+        "value": "python -m pytest examples tests/st --platform a2a3sim -k task_timing_slot && python -m pytest examples tests/st --platform a5sim -k task_timing_slot"
+      }
+    },
+    {
+      "id": "AC-3",
+      "description": "The fixed timing records reset on every run with no stale carry-over; untagged tasks do not sample the device clock, write records, start L2 collectors, or create l2_swimlane output, and the tagged path still builds and passes in SIMPLER_DFX=0 for both sim architectures.",
+      "verification": {
+        "type": "command",
+        "value": "CXX=\"g++ -DSIMPLER_DFX=0\" python simpler_setup/build_runtimes.py --platforms a2a3sim && CXX=\"g++ -DSIMPLER_DFX=0\" python simpler_setup/build_runtimes.py --platforms a5sim && python -m pytest examples tests/st --platform a2a3sim -k task_timing_slot && python -m pytest examples tests/st --platform a5sim -k task_timing_slot"
+      }
+    },
+    {
+      "id": "AC-4",
+      "description": "At least one onboard architecture validates the real per-run H2D reset, Scheduler writes, post-sync D2H readback, and task_slot_N STRACE emission under the repository architecture-precheck and task-submit isolation rules.",
+      "verification": {
+        "type": "command",
+        "value": ".claude/skills/onboard-arch-precheck/check.sh a2a3 && task-submit --device auto --device-num 1 --run \"python -m pytest examples tests/st --platform a2a3 --device \\$TASK_DEVICE -k task_timing_slot\""
+      }
+    },
+    {
+      "id": "AC-5",
+      "description": "Device-phase, L2 timing, and affected runtime documentation defines slot capacity, duplicate-slot aggregation, early-dispatch and deferred-completion semantics, dummy/incomplete behavior, SIMPLER_DFX=0 availability, and the stable STRACE marker names; repository formatting and consistency checks pass.",
+      "verification": {
+        "type": "command",
+        "value": "pre-commit run --all-files"
+      }
+    }
+  ],
+  "dependencies": [],
+  "claim": null,
+  "links": [
+    "https://github.com/hw-native-sys/simpler/issues/1325"
+  ]
+}
