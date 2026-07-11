@@ -7,7 +7,10 @@
     "login": "ChaoWao",
     "github_id": 26245345
   },
-  "owner": null,
+  "owner": {
+    "login": "ChaoWao",
+    "github_id": 26245345
+  },
   "priority": "P3",
   "created_at": "2026-07-11T04:24:46Z",
   "goal": "Confirm add, claim, dependency check, evidence, and archive through the private GitHub origin.",
@@ -25,6 +28,11 @@
     }
   ],
   "dependencies": [],
-  "claim": null,
+  "claim": {
+    "token": "371db5c6a8ed489db6bf3313101ac1e3",
+    "github_login": "ChaoWao",
+    "github_id": 26245345,
+    "claimed_at": "2026-07-11T04:25:14Z"
+  },
   "links": []
 }
