@@ -12,7 +12,7 @@ Register this clone by running its own Python installer. Do not pip/npm install 
 1. Prefer the current Git repository root when it contains `tools/wuditask.py` and `.agents/skills/`.
 2. Otherwise resolve this SKILL.md's real path and walk upward to the directory containing `tools/wuditask.py`.
 3. For repair after a move, use the new clone path supplied by the user.
-4. Refuse a directory that lacks the tool or any required WudiTask skill.
+4. Refuse a directory that lacks the tool, lacks a required WudiTask skill, or contains an unexpected skill.
 
 ## Register
 
@@ -29,8 +29,6 @@ Confirm the JSON reports:
 - `~/.local/bin/wuditask` linked to the repository's Python entry point.
 
 These are symbolic links, not copied files. Prefer `/wuditask-selfupdate` or `$wuditask-selfupdate` for verified future updates. Existing skill content updates immediately through the symlinks. After a non-check self-update reports `reinstall_required=true`, run this installer once without `--replace` to reconcile the suite. It removes a stale skill link only when that symlink still targets this clone; it never deletes unrelated skills or regular files. Also reinstall when the clone moves, is replaced at another path, or a link is damaged. If a long-running agent session has cached old instructions, reopen the session afterward.
-
-Migration note: a first update from a version that installed only `wuditask` and `wuditask-install` runs the old updater process, so it cannot report the newly added sibling links after merging. Run this installer once after that update before using the operation-specific names.
 
 If `launcher_on_path` is false, mention the launcher path; agents can still call the absolute Python entry point from config.
 

@@ -24,9 +24,9 @@ class SelfUpdateTests(unittest.TestCase):
         git(["config", "user.email", "seed@example.invalid"], self.seed)
         (self.seed / "tools").mkdir()
         (self.seed / "tests").mkdir()
-        (self.seed / ".agents" / "skills" / "wuditask").mkdir(parents=True)
-        (self.seed / ".agents" / "skills" / "wuditask" / "SKILL.md").write_text(
-            "---\nname: wuditask\n---\n",
+        (self.seed / ".agents" / "skills" / "wuditask-install").mkdir(parents=True)
+        (self.seed / ".agents" / "skills" / "wuditask-install" / "SKILL.md").write_text(
+            "---\nname: wuditask-install\n---\n",
             encoding="utf-8",
         )
         (self.seed / ".agents" / "skills" / ".draft").mkdir(parents=True)
@@ -59,8 +59,8 @@ class SelfUpdateTests(unittest.TestCase):
             self.home / ".claude" / "skills",
         ):
             product_path.mkdir(parents=True)
-            (product_path / "wuditask").symlink_to(
-                self.client / ".agents" / "skills" / "wuditask",
+            (product_path / "wuditask-install").symlink_to(
+                self.client / ".agents" / "skills" / "wuditask-install",
                 target_is_directory=True,
             )
 

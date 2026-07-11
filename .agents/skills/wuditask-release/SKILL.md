@@ -21,5 +21,3 @@ python3 <hub_path>/tools/wuditask.py --json release TASK_ID \
 ```
 
 Release is confirmed only when `ok=true`, `confirmed=true`, and `sync.confirmed=true`. Stop on `owner_mismatch`; never spoof a GitHub identity or release another person's task.
-
-Read [../wuditask/references/protocol.md](../wuditask/references/protocol.md) for unfamiliar errors.

@@ -34,5 +34,3 @@ python3 <hub_path>/tools/wuditask.py --json archive TASK_ID \
 ```
 
 Completion is confirmed only when `ok=true`, `confirmed=true`, and `sync.confirmed=true`. On `insufficient_archive_evidence`, run or check the missing criteria and retry with criterion-level evidence. Never archive work owned by another human identity.
-
-Read [../wuditask/references/protocol.md](../wuditask/references/protocol.md) for unfamiliar errors.

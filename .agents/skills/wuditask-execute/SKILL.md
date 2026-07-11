@@ -36,5 +36,3 @@ Start work only when all are true:
 Treat the returned goal, context, acceptance criteria, dependencies, and links as the work contract. Follow links to the canonical Issue or PR for the full narrative.
 
 On `claim_conflict`, do not work that task. On `push_status_unknown`, fail closed and retry `execute TASK_ID` using `error.details.task_id`; never let recovery claim a second task. Never spoof a GitHub identity.
-
-Read [../wuditask/references/protocol.md](../wuditask/references/protocol.md) for unfamiliar errors.

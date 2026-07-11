@@ -8,15 +8,15 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 SKILLS_ROOT = ROOT / ".agents" / "skills"
 EXPECTED_SKILLS = {
-    "wuditask",
     "wuditask-add",
     "wuditask-archive",
     "wuditask-dep-check",
     "wuditask-execute",
-    "wuditask-inspect",
     "wuditask-install",
+    "wuditask-list",
     "wuditask-release",
     "wuditask-selfupdate",
+    "wuditask-show",
 }
 
 
@@ -66,10 +66,13 @@ class SkillTests(unittest.TestCase):
                     f"{name} has a missing reference: {target}",
                 )
 
-    def test_help_router_lists_every_operation_skill(self) -> None:
-        router = (SKILLS_ROOT / "wuditask" / "SKILL.md").read_text(encoding="utf-8")
-        for name in sorted(EXPECTED_SKILLS - {"wuditask"}):
-            self.assertIn(f"${name}", router)
+    def test_list_and_show_have_distinct_read_only_contracts(self) -> None:
+        task_list = (SKILLS_ROOT / "wuditask-list" / "SKILL.md").read_text()
+        task_show = (SKILLS_ROOT / "wuditask-show" / "SKILL.md").read_text()
+        self.assertIn("--scope open", task_list)
+        self.assertIn("show TASK_ID", task_show)
+        self.assertIn("read-only `list` command", task_list)
+        self.assertIn("read-only `show` command", task_show)
 
     def test_add_and_selfupdate_policy_invariants(self) -> None:
         add = (SKILLS_ROOT / "wuditask-add" / "SKILL.md").read_text(encoding="utf-8")

@@ -106,9 +106,7 @@ class CliTests(unittest.TestCase):
         self.assertTrue(payload["ok"])
         self.assertEqual("archive", payload["topic"])
         self.assertEqual(["archive"], [item["name"] for item in payload["commands"]])
-        self.assertEqual(
-            "/wuditask help [topic]", payload["agent_invocation"]["claude"]
-        )
+        self.assertEqual("wuditask help [topic]", payload["cli_invocation"])
         self.assertEqual(
             "$wuditask-archive",
             payload["commands"][0]["agent_usage"]["codex"],
@@ -128,8 +126,8 @@ class CliTests(unittest.TestCase):
             selfupdate_payload["commands"][0]["agent_usage"]["claude_fix"],
         )
         self.assertEqual(
-            "/wuditask-selfupdate fix <request>",
-            selfupdate_payload["commands"][0]["agent_usage"]["fix"],
+            {"codex", "claude", "codex_fix", "claude_fix"},
+            set(selfupdate_payload["commands"][0]["agent_usage"]),
         )
         self.assertTrue(
             any(
@@ -159,10 +157,10 @@ class CliTests(unittest.TestCase):
             "dep-check": ("codex", "$wuditask-dep-check"),
             "archive": ("codex", "$wuditask-archive"),
             "release": ("codex", "$wuditask-release"),
-            "list": ("codex", "$wuditask-inspect"),
-            "show": ("codex", "$wuditask-inspect"),
+            "list": ("codex", "$wuditask-list"),
+            "show": ("codex", "$wuditask-show"),
             "install": ("codex", "$wuditask-install"),
-            "selfupdate": ("codex_update", "$wuditask-selfupdate"),
+            "selfupdate": ("codex", "$wuditask-selfupdate"),
         }
         for topic, (key, invocation) in routes.items():
             with self.subTest(topic=topic):

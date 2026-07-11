@@ -37,7 +37,7 @@ python3 tools/wuditask.py --local validate
 然后在 Codex 中调用 `$wuditask-install`，或在 Claude Code 中调用 `/wuditask-install`。安装 skill 会：
 
 1. 把当前 clone 的绝对路径写入 `~/.wuditask/config.json`。
-2. 自动发现 `.agents/skills/` 的直接子目录，把完整 WudiTask skill suite 链接到 `~/.agents/skills` 与 `~/.claude/skills`。
+2. 校验固定的九项 WudiTask skill，并把它们链接到 `~/.agents/skills` 与 `~/.claude/skills`；缺少或多出 skill 都会拒绝安装。
 3. 把一个无安装包的启动链接放到 `~/.local/bin/wuditask`。
 
 也可以直接运行：
@@ -55,17 +55,15 @@ install 创建的是符号链接，不复制 skill 或 CLI：
 - 若一个长期运行的 agent 会话仍缓存旧 skill，重新打开会话即可，不需要 reinstall。
 - clone 被移动或删除时，重新运行 `$wuditask-install` 或 `/wuditask-install` 修复绝对路径。
 
-从只安装 `wuditask` 与 `wuditask-install` 的旧版本首次升级到 operation-specific suite 时，第一次 selfupdate 仍由旧进程完成，无法提示新增 sibling。升级后先用仍然可用的 `$wuditask-install` 或 `/wuditask-install` 幂等运行一次，再使用新的独立名称；不需要 `--replace`。
-
-查看用法：
+查看 CLI 用法：
 
 ```text
-Codex:  $wuditask help
-Claude: /wuditask help
-CLI:    wuditask help
+wuditask help
+wuditask help archive
+wuditask help dep-check
 ```
 
-也可以查看单项，例如 `/wuditask help archive` 或 `wuditask help dep-check`。`wuditask` skill 只负责帮助和兼容路由；实际操作使用独立 skill：
+Agent 直接使用与操作同名的独立 skill：
 
 | 操作 | Codex | Claude Code |
 | --- | --- | --- |
@@ -73,9 +71,11 @@ CLI:    wuditask help
 | 领取并执行 | `$wuditask-execute` | `/wuditask-execute` |
 | 检查依赖 | `$wuditask-dep-check` | `/wuditask-dep-check` |
 | 归档结果 | `$wuditask-archive` | `/wuditask-archive` |
-| 释放任务 | `$wuditask-release` | `/wuditask-release` |
-| 列表与详情 | `$wuditask-inspect` | `/wuditask-inspect` |
+| 将已领取任务退回队列 | `$wuditask-release` | `/wuditask-release` |
+| 列出任务 | `$wuditask-list` | `/wuditask-list` |
+| 查看单个任务 | `$wuditask-show` | `/wuditask-show` |
 | 更新或维护 WudiTask | `$wuditask-selfupdate` | `/wuditask-selfupdate` |
+| 安装或修复本机链接 | `$wuditask-install` | `/wuditask-install` |
 
 安全检查并更新当前安装：
 

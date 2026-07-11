@@ -61,5 +61,3 @@ python3 <hub_path>/tools/wuditask.py --json add \
 ```
 
 If the CLI returns `insufficient_task_spec`, ask the questions in `error.details.questions`, then retry. Report the task ID only when `ok=true`, `confirmed=true`, and `sync.confirmed=true`.
-
-Read [../wuditask/references/protocol.md](../wuditask/references/protocol.md) for large JSON specs or unfamiliar CLI errors.

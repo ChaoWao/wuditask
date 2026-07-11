@@ -52,5 +52,3 @@ Treat `$wuditask-selfupdate fix <request>` or `/wuditask-selfupdate fix <request
 7. After the change reaches `main`, run installed-clone self-update, reconcile installation if `reinstall_required=true`, confirm the new commit and skill links, remove the clean merged worktree and local branch, and return to the original repository and state.
 
 Do not create a GitHub Issue for this maintenance request. Do not run WudiTask `add`, `execute`, `archive`, or `release` for the maintenance itself. A PR is created only when code review or branch protection requires it.
-
-Read [../wuditask/references/protocol.md](../wuditask/references/protocol.md) for self-update errors.

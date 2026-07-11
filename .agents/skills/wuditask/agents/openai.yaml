@@ -1,4 +1,0 @@
-interface:
-  display_name: "WudiTask"
-  short_description: "Explain WudiTask and route task operations"
-  default_prompt: "Use $wuditask to explain the workflow or choose the right WudiTask operation skill."

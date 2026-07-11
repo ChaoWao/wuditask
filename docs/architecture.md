@@ -25,7 +25,7 @@ Task Hub 是唯一事实源，包含：
 
 - `data/`：业务数据。
 - `wuditask/` 与 `tools/wuditask.py`：同版本访问工具。
-- `.agents/skills/`：按 add、execute、dep-check、archive、release、inspect、selfupdate 拆分的 agent 操作规程，以及共享 help/protocol 与 installer。
+- `.agents/skills/`：与 add、execute、dep-check、archive、release、list、show、selfupdate 和 install 操作一一对应的 agent skills。
 - `site/`：只读可视化源码。
 - `.github/workflows/pages.yml`：校验、构建与部署。
 

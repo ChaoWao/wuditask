@@ -28,5 +28,3 @@ python3 <hub_path>/tools/wuditask.py --json dep-check
 Explain expanded dependency repositories, goals, acceptance criteria, outcomes, and evidence. Treat a dependency as ready only when it is archived with `outcome=done` and every acceptance criterion has complete passing evidence.
 
 Missing, open, failed, cancelled, incomplete, or cyclic dependencies block execution. Do not bypass blockers or mutate task files while answering a readiness question.
-
-Read [../wuditask/references/protocol.md](../wuditask/references/protocol.md) for unfamiliar errors.

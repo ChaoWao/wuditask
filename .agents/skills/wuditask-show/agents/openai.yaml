@@ -1,0 +1,4 @@
+interface:
+  display_name: "Show WudiTask"
+  short_description: "Show one WudiTask and its derived state"
+  default_prompt: "Use $wuditask-show to display one WudiTask and its dependency state."

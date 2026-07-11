@@ -71,16 +71,16 @@ HELP_COMMANDS = {
         "purpose": "List open, archived, or all tasks.",
         "usage": "wuditask list [--scope open|archive|all] [--repo owner/name]",
         "agent_usage": {
-            "codex": "$wuditask-inspect",
-            "claude": "/wuditask-inspect",
+            "codex": "$wuditask-list",
+            "claude": "/wuditask-list",
         },
     },
     "show": {
         "purpose": "Show one task and its derived dependency state.",
         "usage": "wuditask show TASK_ID",
         "agent_usage": {
-            "codex": "$wuditask-inspect",
-            "claude": "/wuditask-inspect",
+            "codex": "$wuditask-show",
+            "claude": "/wuditask-show",
         },
     },
     "install": {
@@ -95,10 +95,8 @@ HELP_COMMANDS = {
         "purpose": "Safely update the installed clone or directly maintain WudiTask.",
         "usage": "wuditask selfupdate [--check]",
         "agent_usage": {
-            "update": "/wuditask-selfupdate",
-            "fix": "/wuditask-selfupdate fix <request>",
-            "codex_update": "$wuditask-selfupdate",
-            "claude_update": "/wuditask-selfupdate",
+            "codex": "$wuditask-selfupdate",
+            "claude": "/wuditask-selfupdate",
             "codex_fix": "$wuditask-selfupdate fix <request>",
             "claude_fix": "/wuditask-selfupdate fix <request>",
         },
@@ -339,14 +337,11 @@ def _help(topic: str | None) -> dict[str, Any]:
     return {
         "message": "WudiTask help",
         "topic": topic or "workflow",
-        "agent_invocation": {
-            "codex": "$wuditask help [topic]",
-            "claude": "/wuditask help [topic]",
-        },
+        "cli_invocation": "wuditask help [topic]",
         "workflow": workflow,
         "commands": [{"name": name, **details} for name, details in selected.items()],
         "notes": [
-            "Use the operation-specific agent skill shown for each command; $wuditask and /wuditask are the help router.",
+            "Use the operation-specific agent skill shown for each command.",
             "For add, use a matching GitHub Issue or PR as the canonical narrative when the owning repository is clear.",
             "Selfupdate fix directly maintains WudiTask in an isolated worktree; it does not create an Issue or queue task.",
             "Run commands from the target work repository so owner/name can be detected from origin.",
@@ -449,15 +444,12 @@ def _text(result: dict[str, Any]) -> str:
             lines.append(f"  {command['name']}: {command['purpose']}")
             lines.append(f"    {command['usage']}")
             for mode, invocation in command.get("agent_usage", {}).items():
-                if command["name"] == "selfupdate" and mode in {"update", "fix"}:
-                    continue
                 lines.append(f"    {mode}: {invocation}")
         lines.extend(
             [
                 "",
-                "Agent invocation",
-                f"  Codex: {result['agent_invocation']['codex']}",
-                f"  Claude: {result['agent_invocation']['claude']}",
+                "CLI help",
+                f"  {result['cli_invocation']}",
             ]
         )
         if result.get("notes"):
