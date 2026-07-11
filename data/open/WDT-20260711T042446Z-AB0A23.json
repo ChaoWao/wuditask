@@ -1,0 +1,30 @@
+{
+  "schema_version": 1,
+  "id": "WDT-20260711T042446Z-AB0A23",
+  "title": "Smoke: verify remote lifecycle",
+  "repo": "ChaoWao/wuditask",
+  "created_by": {
+    "login": "ChaoWao",
+    "github_id": 26245345
+  },
+  "owner": null,
+  "priority": "P3",
+  "created_at": "2026-07-11T04:24:46Z",
+  "goal": "Confirm add, claim, dependency check, evidence, and archive through the private GitHub origin.",
+  "context": [
+    "This is an implementation smoke test for the WudiTask repository itself."
+  ],
+  "acceptance_criteria": [
+    {
+      "id": "AC-1",
+      "description": "The complete Python test suite passes.",
+      "verification": {
+        "type": "command",
+        "value": "python3 -m unittest discover -s tests -v"
+      }
+    }
+  ],
+  "dependencies": [],
+  "claim": null,
+  "links": []
+}
