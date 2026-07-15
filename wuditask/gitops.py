@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 import contextlib
+import hashlib
+import os
+import shutil
 import subprocess
-import tempfile
 import time
+import uuid
 from pathlib import Path
 from typing import Any, Callable, Iterator
 
@@ -20,6 +23,86 @@ Operation = Callable[[TaskRepository], dict[str, Any]]
 BeforePush = Callable[[int, Path], None]
 
 
+def default_cache_root(*, home: Path | None = None) -> Path:
+    if home is not None:
+        base = home.expanduser().resolve() / ".cache"
+    else:
+        configured = os.environ.get("XDG_CACHE_HOME", "").strip()
+        candidate = Path(configured).expanduser() if configured else None
+        base = (
+            candidate
+            if candidate is not None and candidate.is_absolute()
+            else Path.home().expanduser().resolve() / ".cache"
+        )
+    return (base / "wuditask").resolve()
+
+
+@contextlib.contextmanager
+def _file_lock(path: Path) -> Iterator[None]:
+    path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    with path.open("a+", encoding="utf-8") as handle:
+        if fcntl is not None:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+            try:
+                yield
+            finally:
+                fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+            return
+        import msvcrt  # pragma: no cover - Windows only
+
+        handle.seek(0)
+        if handle.read(1) == "":
+            handle.write("0")
+            handle.flush()
+        while True:
+            handle.seek(0)
+            try:
+                msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
+                break
+            except OSError:
+                time.sleep(0.05)
+        try:
+            yield
+        finally:
+            handle.seek(0)
+            msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
+
+
+@contextlib.contextmanager
+def _try_file_lock(path: Path) -> Iterator[bool]:
+    path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    with path.open("a+", encoding="utf-8") as handle:
+        acquired = False
+        if fcntl is not None:
+            try:
+                fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                acquired = True
+            except BlockingIOError:
+                pass
+        else:  # pragma: no cover - Windows only
+            import msvcrt
+
+            handle.seek(0)
+            if handle.read(1) == "":
+                handle.write("0")
+                handle.flush()
+            handle.seek(0)
+            try:
+                msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
+                acquired = True
+            except OSError:
+                pass
+        try:
+            yield acquired
+        finally:
+            if acquired:
+                if fcntl is not None:
+                    fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+                else:  # pragma: no cover - Windows only
+                    handle.seek(0)
+                    msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
+
+
 class GitCoordinator:
     """Run optimistic Git transactions without force-pushing."""
 
@@ -29,6 +112,7 @@ class GitCoordinator:
         local_root: Path | None = None,
         remote: str | None = None,
         branch: str | None = None,
+        cache_root: Path | None = None,
         max_attempts: int = 5,
         before_push: BeforePush | None = None,
     ) -> None:
@@ -47,10 +131,59 @@ class GitCoordinator:
         self.branch = branch.strip() if branch is not None else None
         self.max_attempts = max_attempts
         self.before_push = before_push
+        self._cache_root = (
+            (cache_root or default_cache_root()).expanduser().resolve()
+            if remote is not None
+            else None
+        )
+        self._cache_key = (
+            hashlib.sha256(f"{self.remote}\0{self.branch}".encode("utf-8")).hexdigest()
+            if remote is not None
+            else None
+        )
+        if remote is not None:
+            branch_check = subprocess.run(
+                ["git", "check-ref-format", f"refs/heads/{self.branch}"],
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+            if branch_check.returncode != 0:
+                raise WudiTaskError(
+                    "invalid_git_coordinator",
+                    "A remote task Hub branch must be a valid Git branch name.",
+                    details={"branch": self.branch},
+                )
 
     @property
     def distributed(self) -> bool:
         return self.remote is not None
+
+    @property
+    def cache_path(self) -> Path:
+        if not self.distributed:
+            raise WudiTaskError(
+                "local_hub_has_no_cache",
+                "An explicit local task Hub does not use the remote cache.",
+            )
+        assert self._cache_root is not None
+        assert self._cache_key is not None
+        return self._cache_root / "hubs" / f"{self._cache_key}.git"
+
+    @property
+    def _operations_root(self) -> Path:
+        assert self._cache_root is not None
+        return self._cache_root / "operations"
+
+    @property
+    def _cache_lock_path(self) -> Path:
+        assert self._cache_root is not None
+        assert self._cache_key is not None
+        return self._cache_root / "locks" / f"{self._cache_key}.lock"
+
+    def _operation_lease_path(self, operation: Path) -> Path:
+        assert self._cache_root is not None
+        return self._cache_root / "locks" / "operations" / f"{operation.name}.lock"
 
     @contextlib.contextmanager
     def snapshot(self) -> Iterator[TaskRepository]:
@@ -59,9 +192,7 @@ class GitCoordinator:
             repository = TaskRepository(self.root)
             yield repository
             return
-        with tempfile.TemporaryDirectory(prefix="wuditask-read-") as temporary:
-            checkout = Path(temporary) / "hub"
-            self._clone(checkout)
+        with self._remote_worktree("read") as checkout:
             yield TaskRepository(checkout)
 
     def write(
@@ -84,9 +215,7 @@ class GitCoordinator:
 
         last_rejection = ""
         for attempt in range(1, self.max_attempts + 1):
-            with tempfile.TemporaryDirectory(prefix="wuditask-write-") as temporary:
-                checkout = Path(temporary) / "hub"
-                self._clone(checkout)
+            with self._remote_worktree("write") as checkout:
                 repository = TaskRepository(checkout)
                 result = operation(repository)
                 if not result.get("changed", True):
@@ -109,18 +238,20 @@ class GitCoordinator:
                         "empty_transaction",
                         "The task operation reported a change but staged no data.",
                     )
-                self._run(["git", "config", "user.name", actor.login], cwd=checkout)
                 self._run(
                     [
                         "git",
-                        "config",
-                        "user.email",
-                        f"{actor.github_id}+{actor.login}@users.noreply.github.com",
+                        "-c",
+                        f"user.name={actor.login}",
+                        "-c",
+                        (
+                            "user.email="
+                            f"{actor.github_id}+{actor.login}@users.noreply.github.com"
+                        ),
+                        "commit",
+                        "-m",
+                        commit_message(result),
                     ],
-                    cwd=checkout,
-                )
-                self._run(
-                    ["git", "commit", "-m", commit_message(result)],
                     cwd=checkout,
                 )
                 commit = self._run(
@@ -185,36 +316,297 @@ class GitCoordinator:
             exit_code=3,
         )
 
-    def _clone(self, checkout: Path) -> None:
+    def _ensure_cache(self) -> None:
         assert self.remote is not None
-        assert self.branch is not None
-        process = self._run(
-            [
-                "git",
-                "clone",
-                "--quiet",
-                "--depth",
-                "1",
-                "--single-branch",
-                "--branch",
-                self.branch,
-                self.remote,
-                str(checkout),
-            ],
-            cwd=checkout.parent,
-            allowed=None,
-        )
-        if process.returncode != 0:
+        assert self._cache_key is not None
+        cache_path = self.cache_path
+        cache_path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+        staging_prefix = f".{self._cache_key}-"
+        for stale in cache_path.parent.glob(f"{staging_prefix}*.tmp"):
+            shutil.rmtree(stale, ignore_errors=True)
+        if not cache_path.exists():
+            staging = cache_path.parent / (
+                f"{staging_prefix}{os.getpid()}-{uuid.uuid4().hex}.tmp"
+            )
+            try:
+                initialized = self._run(
+                    ["git", "init", "--bare", str(staging)],
+                    cwd=cache_path.parent,
+                    allowed=None,
+                )
+                if initialized.returncode != 0:
+                    raise WudiTaskError(
+                        "hub_cache_initialization_failed",
+                        "Could not initialize the persistent task Hub cache.",
+                        details={
+                            "cache": str(cache_path),
+                            "stderr": initialized.stderr.strip(),
+                        },
+                        exit_code=4,
+                    )
+                configured = self._run(
+                    ["git", "remote", "add", "origin", self.remote],
+                    cwd=staging,
+                    allowed=None,
+                )
+                if configured.returncode != 0:
+                    raise WudiTaskError(
+                        "hub_cache_initialization_failed",
+                        "Could not configure the persistent task Hub cache.",
+                        details={
+                            "cache": str(cache_path),
+                            "stderr": configured.stderr.strip(),
+                        },
+                        exit_code=4,
+                    )
+                staging.replace(cache_path)
+            finally:
+                shutil.rmtree(staging, ignore_errors=True)
+            return
+
+        if not cache_path.is_dir():
             raise WudiTaskError(
-                "remote_read_failed",
-                "Could not clone the latest WudiTask state.",
+                "hub_cache_invalid",
+                "The persistent task Hub cache is not usable.",
                 details={
+                    "cache": str(cache_path),
                     "remote": self.remote,
-                    "branch": self.branch,
-                    "stderr": process.stderr.strip(),
+                    "action": "Remove this disposable cache path and retry.",
                 },
                 exit_code=4,
             )
+        bare = self._run(
+            ["git", "rev-parse", "--is-bare-repository"],
+            cwd=cache_path,
+            allowed=None,
+        )
+        configured = self._run(
+            ["git", "config", "--local", "--get", "remote.origin.url"],
+            cwd=cache_path,
+            allowed=None,
+        )
+        if (
+            bare.returncode != 0
+            or bare.stdout.strip() != "true"
+            or configured.returncode != 0
+            or configured.stdout.strip() != self.remote
+        ):
+            raise WudiTaskError(
+                "hub_cache_invalid",
+                "The persistent task Hub cache is not usable.",
+                details={
+                    "cache": str(cache_path),
+                    "remote": self.remote,
+                    "action": "Remove this disposable cache directory and retry.",
+                },
+                exit_code=4,
+            )
+
+    def _fetch_head(self) -> str:
+        assert self.branch is not None
+        remote_ref = f"refs/remotes/origin/{self.branch}"
+        fetched = self._run(
+            [
+                "git",
+                "fetch",
+                "--quiet",
+                "--prune",
+                "--no-tags",
+                "origin",
+                f"+refs/heads/{self.branch}:{remote_ref}",
+            ],
+            cwd=self.cache_path,
+            allowed=None,
+        )
+        if fetched.returncode != 0:
+            raise WudiTaskError(
+                "remote_read_failed",
+                "Could not fetch the latest WudiTask state.",
+                details={
+                    "remote": self.remote,
+                    "branch": self.branch,
+                    "cache": str(self.cache_path),
+                    "stderr": fetched.stderr.strip(),
+                },
+                exit_code=4,
+            )
+        resolved = self._run(
+            ["git", "rev-parse", "--verify", f"{remote_ref}^{{commit}}"],
+            cwd=self.cache_path,
+            allowed=None,
+        )
+        if resolved.returncode != 0:
+            raise WudiTaskError(
+                "remote_read_failed",
+                "Could not resolve the configured task Hub branch.",
+                details={
+                    "remote": self.remote,
+                    "branch": self.branch,
+                    "cache": str(self.cache_path),
+                    "stderr": resolved.stderr.strip(),
+                },
+                exit_code=4,
+            )
+        return resolved.stdout.strip()
+
+    @staticmethod
+    def _remove_path(path: Path) -> None:
+        if path.is_symlink() or path.is_file():
+            path.unlink(missing_ok=True)
+            return
+        shutil.rmtree(path, ignore_errors=False)
+
+    def _remove_operation(self, operation: Path) -> None:
+        if operation.is_symlink() or not operation.is_dir():
+            self._remove_path(operation)
+            return
+        checkout = operation / "hub"
+        if checkout.exists() or checkout.is_symlink():
+            removed = self._run(
+                ["git", "worktree", "remove", "--force", str(checkout)],
+                cwd=self.cache_path,
+                allowed=None,
+            )
+            if removed.returncode != 0:
+                self._remove_path(checkout)
+        self._remove_path(operation)
+
+    def _reap_orphan_operations(self) -> None:
+        assert self._cache_key is not None
+        prefix = f"{self._cache_key}-"
+        leases_root = self._cache_lock_path.parent / "operations"
+        if self._operations_root.is_dir():
+            for operation in sorted(self._operations_root.iterdir()):
+                if not operation.name.startswith(prefix):
+                    continue
+                lease_path = self._operation_lease_path(operation)
+                with _try_file_lock(lease_path) as acquired:
+                    if not acquired:
+                        continue
+                    self._remove_operation(operation)
+                lease_path.unlink(missing_ok=True)
+        self._run(
+            ["git", "worktree", "prune", "--expire", "now"],
+            cwd=self.cache_path,
+        )
+        if leases_root.is_dir():
+            for lease_path in sorted(leases_root.glob(f"{prefix}*.lock")):
+                operation_name = lease_path.name.removesuffix(".lock")
+                operation = self._operations_root / operation_name
+                if operation.exists() or operation.is_symlink():
+                    continue
+                with _try_file_lock(lease_path) as acquired:
+                    if not acquired:
+                        continue
+                lease_path.unlink(missing_ok=True)
+
+    @contextlib.contextmanager
+    def _remote_worktree(self, purpose: str) -> Iterator[Path]:
+        manager = self._remote_worktree_impl(purpose)
+        try:
+            checkout = manager.__enter__()
+        except WudiTaskError:
+            raise
+        except OSError as exc:
+            raise self._cache_io_failure(exc) from exc
+        try:
+            yield checkout
+        except BaseException as exc:
+            try:
+                suppressed = manager.__exit__(type(exc), exc, exc.__traceback__)
+            except WudiTaskError:
+                raise
+            except OSError as cleanup_error:
+                raise self._cache_io_failure(cleanup_error) from cleanup_error
+            if not suppressed:
+                raise
+        else:
+            try:
+                manager.__exit__(None, None, None)
+            except WudiTaskError:
+                raise
+            except OSError as exc:
+                raise self._cache_io_failure(exc) from exc
+
+    def _cache_io_failure(self, error: OSError) -> WudiTaskError:
+        assert self._cache_root is not None
+        return WudiTaskError(
+            "hub_cache_io_failed",
+            "The persistent task Hub cache could not be accessed.",
+            details={
+                "cache_root": str(self._cache_root),
+                "path": str(error.filename) if error.filename else None,
+                "error": str(error),
+                "action": "Check the cache path, permissions, and available space.",
+            },
+            exit_code=4,
+        )
+
+    @contextlib.contextmanager
+    def _remote_worktree_impl(self, purpose: str) -> Iterator[Path]:
+        assert self._cache_key is not None
+        operation = self._operations_root / (
+            f"{self._cache_key}-{purpose}-{os.getpid()}-{uuid.uuid4().hex}"
+        )
+        checkout = operation / "hub"
+        lease_path = self._operation_lease_path(operation)
+        assert self._cache_root is not None
+        self._cache_root.mkdir(mode=0o700, parents=True, exist_ok=True)
+        try:
+            with _file_lock(lease_path):
+                try:
+                    with _file_lock(self._cache_lock_path):
+                        self._operations_root.mkdir(
+                            mode=0o700,
+                            parents=True,
+                            exist_ok=True,
+                        )
+                        self._ensure_cache()
+                        self._reap_orphan_operations()
+                        commit = self._fetch_head()
+                        operation.mkdir(mode=0o700)
+                        added = self._run(
+                            [
+                                "git",
+                                "worktree",
+                                "add",
+                                "--quiet",
+                                "--detach",
+                                str(checkout),
+                                commit,
+                            ],
+                            cwd=self.cache_path,
+                            allowed=None,
+                        )
+                        if added.returncode != 0:
+                            raise WudiTaskError(
+                                "hub_cache_worktree_failed",
+                                "Could not create an isolated task Hub worktree.",
+                                details={
+                                    "cache": str(self.cache_path),
+                                    "stderr": added.stderr.strip(),
+                                },
+                                exit_code=4,
+                            )
+                    yield checkout
+                finally:
+                    with _file_lock(self._cache_lock_path):
+                        if operation.exists() or operation.is_symlink():
+                            if self.cache_path.is_dir():
+                                self._remove_operation(operation)
+                            else:
+                                self._remove_path(operation)
+                        if self.cache_path.is_dir():
+                            self._run(
+                                ["git", "worktree", "prune", "--expire", "now"],
+                                cwd=self.cache_path,
+                                allowed=None,
+                            )
+        finally:
+            try:
+                lease_path.unlink(missing_ok=True)
+            except OSError:
+                pass
 
     def _push(self, checkout: Path) -> subprocess.CompletedProcess[str]:
         assert self.branch is not None
@@ -230,9 +622,7 @@ class GitCoordinator:
         if not isinstance(expected, dict) or not isinstance(task_id, str):
             return False
         try:
-            with tempfile.TemporaryDirectory(prefix="wuditask-confirm-") as temporary:
-                checkout = Path(temporary) / "hub"
-                self._clone(checkout)
+            with self._remote_worktree("confirm") as checkout:
                 record = TaskRepository(checkout).load_index().get(task_id)
                 return record is not None and record.task == expected
         except WudiTaskError:
@@ -279,26 +669,5 @@ class GitCoordinator:
     @contextlib.contextmanager
     def _local_lock(self) -> Iterator[None]:
         assert self.root is not None
-        lock_path = self.root / ".wuditask.lock"
-        lock_path.parent.mkdir(parents=True, exist_ok=True)
-        with lock_path.open("a+", encoding="utf-8") as handle:
-            if fcntl is not None:
-                fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
-                try:
-                    yield
-                finally:
-                    fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
-                return
-            import msvcrt  # pragma: no cover - Windows only
-
-            handle.seek(0)
-            if handle.read(1) == "":
-                handle.write("0")
-                handle.flush()
-            handle.seek(0)
-            msvcrt.locking(handle.fileno(), msvcrt.LK_LOCK, 1)
-            try:
-                yield
-            finally:
-                handle.seek(0)
-                msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
+        with _file_lock(self.root / ".wuditask.lock"):
+            yield

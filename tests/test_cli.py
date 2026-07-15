@@ -195,6 +195,51 @@ class CliTests(unittest.TestCase):
             payload["open_tasks"][0]["id"],
         )
 
+    def test_remote_cache_io_failure_preserves_the_json_contract(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            base = Path(temporary)
+            home = base / "home"
+            home.mkdir()
+            hub = make_hub_origin(base)
+            atomic_write_json(
+                home / ".wuditask" / "config.json",
+                {
+                    "schema_version": 2,
+                    "tool_path": str(ROOT),
+                    "tool_remote": git(
+                        ["remote", "get-url", "origin"], ROOT
+                    ).stdout.strip(),
+                    "tool_branch": git(
+                        ["branch", "--show-current"], ROOT
+                    ).stdout.strip(),
+                    "hub_remote": str(hub),
+                    "hub_branch": "main",
+                    "installed_at": "2026-07-11T12:00:00Z",
+                },
+            )
+            invalid_xdg = base / "cache-file"
+            invalid_xdg.write_text("not a directory\n", encoding="utf-8")
+            environment = {
+                **os.environ,
+                "HOME": str(home),
+                "XDG_CACHE_HOME": str(invalid_xdg),
+            }
+
+            result = subprocess.run(
+                [sys.executable, str(TOOL), "--json", "validate"],
+                cwd=ROOT,
+                env=environment,
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+
+        self.assertEqual(4, result.returncode)
+        self.assertEqual("", result.stderr)
+        payload = json.loads(result.stdout)
+        self.assertFalse(payload["ok"])
+        self.assertEqual("hub_cache_io_failed", payload["error"]["code"])
+
     def test_missing_spec_returns_structured_questions(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             result = self.run_cli(Path(temporary), "add", "--title", "Incomplete")

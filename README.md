@@ -41,8 +41,11 @@ cd wuditask
 然后在 Codex 中调用 `$wuditask-install`，或在 Claude Code 中调用 `/wuditask-install`。安装 skill 会：
 
 1. 把当前工具 clone 及独立 Hub 远端写入 `~/.wuditask/config.json`。
-2. 校验固定的九项 WudiTask skill，并把它们链接到 `~/.agents/skills` 与 `~/.claude/skills`；缺少或多出 skill 都会拒绝安装。
-3. 把一个无安装包的启动链接放到 `~/.local/bin/wuditask`。
+2. 在用户 cache 中初始化或复用 Hub bare repository，并在隔离 worktree 中
+   校验 `hub.json` 与任务数据。
+3. 校验固定的九项 WudiTask skill，并把它们链接到 `~/.agents/skills` 与
+   `~/.claude/skills`；缺少或多出 skill 都会拒绝安装。
+4. 把一个无安装包的启动链接放到 `~/.local/bin/wuditask`。
 
 也可以直接运行：
 
@@ -67,6 +70,26 @@ python3 tools/wuditask.py --json install \
 ```
 
 旧的 `hub_path` 配置不会被推断或迁移；重新运行 install 完成一次性切换。
+
+Hub checkout 是可重建的派生数据，不写入 config。默认 cache 根目录是
+`~/.cache/wuditask`；若 `XDG_CACHE_HOME` 是绝对路径，则使用
+`$XDG_CACHE_HOME/wuditask`。布局如下：
+
+```text
+wuditask/
+  hubs/<remote-and-branch-hash>.git  持久 bare repository
+  operations/<unique-id>/hub        每次命令的隔离 worktree
+  locks/<remote-and-branch-hash>.lock
+  locks/operations/<unique-id>.lock operation lease
+```
+
+每个远端命令先 fetch 最新分支，再从精确 commit 创建 worktree。正常返回或
+异常时都会删除 operation worktree，但保留 bare repository 和 Git objects。
+每个 operation 在完整生命周期持有独立 lease；若进程被强杀或机器掉电，下一
+条命令只回收已经能取得 lease 的 orphan worktree，避免误删仍活跃的并发操作。
+不同 remote/branch 使用不同 hash，不会串用 origin；整个 cache 都可安全删除，
+下一条命令会重建。install 的 JSON 结果通过 `hub_cache` 报告实际 bare cache
+路径，配置 schema v2 不增加 cache 字段。
 
 install 创建的是符号链接，不复制 skill 或 CLI：
 

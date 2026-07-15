@@ -57,8 +57,17 @@ python3 tools/wuditask.py --json install \
 ```
 
 安装结果把工具路径与 Hub 远端分别写入 config schema v2，并创建 symlink，
-不执行 pip/npm 安装，也不复制 skill。installer 在改变本机状态前浅 clone Hub，
-校验 `hub.json` 和任务数据。旧 `hub_path` 配置不兼容，也不会自动迁移。
+不执行 pip/npm 安装，也不复制 skill。installer 在用户 cache 中初始化或复用
+Hub bare repository，fetch 配置分支，并在隔离 worktree 中校验 `hub.json` 和
+任务数据。校验失败时不会写 config、skill link 或 launcher；已经取得的 Git
+objects 可以作为可删除 cache 保留。旧 `hub_path` 配置不兼容，也不会自动迁移。
+
+cache 默认位于 `~/.cache/wuditask`；绝对路径的 `XDG_CACHE_HOME` 会覆盖
+`~/.cache`。`hubs/` 按 remote 和 branch 的哈希分桶，`operations/` 保存每条
+命令的唯一 worktree，`locks/` 只协调本机 cache 的 fetch 与 worktree 元数据。
+每个 operation 另持有独立 lease。正常完成时立即删除 worktree；若进程被强杀，
+下一条命令会回收已经无人持有 lease 的 orphan。bare repository 长期复用。
+cache 路径不进入 config，install JSON 通过 `hub_cache` 单独报告它。
 
 ### 更新 WudiTask 本体
 

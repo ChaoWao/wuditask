@@ -8,7 +8,7 @@ from typing import Any
 
 from .configuration import CONFIG_SCHEMA_VERSION, config_path
 from .errors import WudiTaskError
-from .gitops import GitCoordinator
+from .gitops import GitCoordinator, default_cache_root
 from .util import atomic_write_json, repo_from_remote, utc_now
 from .validation import validate_repository
 
@@ -185,6 +185,9 @@ def install_agent_access(
     replace: bool = False,
 ) -> dict[str, Any]:
     tool_root = tool_root.resolve()
+    cache_root = (
+        default_cache_root(home=home) if home is not None else default_cache_root()
+    )
     home = (home or Path.home()).resolve()
     hub_remote = hub_remote.strip()
     hub_branch = hub_branch.strip()
@@ -247,7 +250,11 @@ def install_agent_access(
         )
     skills = [skills_root / name for name in sorted(REQUIRED_SKILL_NAMES)]
 
-    coordinator = GitCoordinator(remote=hub_remote, branch=hub_branch)
+    coordinator = GitCoordinator(
+        remote=hub_remote,
+        branch=hub_branch,
+        cache_root=cache_root,
+    )
     with coordinator.snapshot() as repository:
         hub_validation = validate_repository(repository)
 
@@ -339,6 +346,7 @@ def install_agent_access(
         "tool_branch": tool_branch,
         "hub_remote": hub_remote,
         "hub_branch": hub_branch,
+        "hub_cache": str(coordinator.cache_path),
         "hub_validation": hub_validation,
         "skills": [skill.name for skill in skills],
         "links": links,

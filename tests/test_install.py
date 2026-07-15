@@ -86,6 +86,11 @@ class InstallTests(unittest.TestCase):
             self.assertEqual(str(hub_remote), config["hub_remote"])
             self.assertEqual("main", config["hub_branch"])
             self.assertNotIn("hub_path", config)
+            self.assertNotIn("hub_cache", config)
+            self.assertEqual(
+                str(next((home / ".cache" / "wuditask" / "hubs").iterdir()).resolve()),
+                result["hub_cache"],
+            )
             self.assertEqual(
                 str((home / ".wuditask" / "config.json").resolve()),
                 result["config"],
@@ -157,7 +162,13 @@ class InstallTests(unittest.TestCase):
                 )
 
             self.assertEqual("invalid_task_data", raised.exception.code)
-            self.assertFalse(home.exists())
+            self.assertFalse((home / ".wuditask" / "config.json").exists())
+            self.assertFalse((home / ".agents").exists())
+            self.assertFalse((home / ".claude").exists())
+            self.assertFalse((home / ".local").exists())
+            self.assertEqual(
+                [], list((home / ".cache" / "wuditask" / "operations").iterdir())
+            )
 
     def test_installer_rejects_tool_repository_as_the_hub(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -220,7 +231,13 @@ class InstallTests(unittest.TestCase):
                 )
 
             self.assertEqual("invalid_task_data", raised.exception.code)
-            self.assertFalse(home.exists())
+            self.assertFalse((home / ".wuditask" / "config.json").exists())
+            self.assertFalse((home / ".agents").exists())
+            self.assertFalse((home / ".claude").exists())
+            self.assertFalse((home / ".local").exists())
+            self.assertEqual(
+                [], list((home / ".cache" / "wuditask" / "operations").iterdir())
+            )
 
     def test_installer_removes_only_registered_stale_skill_links(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -362,13 +379,21 @@ class InstallTests(unittest.TestCase):
             home = Path(temporary)
             tool = make_tool(home / "fixture", content_source=ROOT)
             hub_remote = make_hub_origin(home)
-            install_agent_access(tool, hub_remote=str(hub_remote), home=home)
+            first = install_agent_access(
+                tool,
+                hub_remote=str(hub_remote),
+                home=home,
+            )
+            marker = Path(first["hub_cache"]) / "reuse-marker"
+            marker.write_text("preserved\n", encoding="utf-8")
             second = install_agent_access(
                 tool,
                 hub_remote=str(hub_remote),
                 home=home,
             )
             self.assertTrue(all(not link["changed"] for link in second["links"]))
+            self.assertEqual(first["hub_cache"], second["hub_cache"])
+            self.assertEqual("preserved\n", marker.read_text(encoding="utf-8"))
 
     def test_installer_rejects_a_missing_required_skill(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

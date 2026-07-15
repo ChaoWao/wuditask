@@ -28,6 +28,7 @@ python3 TOOL/tools/wuditask.py --json install \
 Confirm the JSON reports:
 
 - `~/.wuditask/config.json` schema v2 with `tool_path`, `tool_remote`, `tool_branch`, `hub_remote`, and `hub_branch`;
+- `hub_cache` under `$XDG_CACHE_HOME/wuditask` or `~/.cache/wuditask`, pointing to the persistent bare cache selected by the Hub remote and branch;
 - the complete reported skill suite linked under both `~/.agents/skills` and `~/.claude/skills`;
 - `~/.local/bin/wuditask` linked to the repository's Python entry point.
 
@@ -37,10 +38,10 @@ If `launcher_on_path` is false, mention the launcher path; agents can still call
 
 If installation returns `install_path_exists`, inspect and tell the user which destination conflicts. Do not use `--replace` until the user explicitly approves. When approved, rerun with `--replace`; the installer renames existing content to a timestamped backup.
 
-The installer clones and validates the configured Hub before changing links or config. After a successful install, run a remote validation once more through the registered CLI:
+The installer initializes or refreshes the persistent bare Hub cache and validates an isolated operation worktree before changing links or config. A validation failure may leave reusable Git objects in this disposable cache, but it must not create config, skill links, or the launcher. After a successful install, run a remote validation once more through the registered CLI:
 
 ```bash
 python3 TOOL/tools/wuditask.py --json validate
 ```
 
-Report the registered tool path, Hub remote and branch, and validation result. Rerun this skill whenever the tool clone moves or the Hub remote changes.
+Report the registered tool path, Hub remote and branch, bare cache path, and validation result. Rerun this skill whenever the tool clone moves or the Hub remote changes.

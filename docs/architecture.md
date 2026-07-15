@@ -37,6 +37,13 @@ Task Hub 是任务状态的唯一事实源，只包含：
 `hub.json` 只允许当前工具认识的精确字段和值。缺失、额外字段或版本不匹配
 都会在读写前失败；系统没有旧 Hub fallback 或隐式迁移路径。
 
+远端 Hub 的本地副本只是可删除 cache。CLI 按 remote 和 branch 的哈希在
+`${XDG_CACHE_HOME:-$HOME/.cache}/wuditask/hubs/` 保存 bare repository；配置
+仍只记录远端，不记录 cache 路径。每条命令 fetch 最新远端 commit，并在唯一
+operation worktree 中读取或修改。命令结束后删除 worktree，Git objects 留在
+cache 中供后续命令复用。bare cache 首次初始化在同级 staging 目录完成，再
+原子 rename 到最终 hash 路径，初始化中断不会留下被误认成有效 cache 的半成品。
+
 ### Work repository
 
 工作仓库不保存 WudiTask 锁文件，也不需要安装 SDK。agent 在工作仓库中读取 origin，以 `owner/name` 匹配 Task Hub 中的任务，然后在该工作仓库完成代码与验证。
@@ -52,31 +59,42 @@ Pages 暂时不可用，CLI 与 Git 协议仍可运行。
 
 每个远端写命令执行同一套事务：
 
-1. 从配置的 `hub_remote/hub_branch` 创建临时 clone，得到新快照。
-2. 在临时 clone 中重新检查 schema、owner、claim 和依赖。
-3. 只修改目标任务文件。
-4. 创建普通 Git commit。
+1. 在对应的持久 bare cache 中 fetch 配置的 `hub_remote/hub_branch`。
+2. 从 fetch 得到的精确 commit 创建唯一的 detached operation worktree。
+3. 在 worktree 中重新检查 schema、owner、claim 和依赖。
+4. 只修改目标任务文件，并用当前 human identity 创建 Git commit。
 5. 执行普通 `git push`，从不使用 `--force`。
 6. push 成功后返回 `sync.confirmed=true`；工具 clone 不执行 refresh。
-7. 如果因 non-fast-forward 被拒绝，丢弃临时 clone，从第 1 步重新开始。
+7. 删除 operation worktree；bare cache 继续保留。
+8. 如果因 non-fast-forward 被拒绝，从第 1 步重新 fetch、重新判断并重放。
 
 ```mermaid
 sequenceDiagram
   participant A as Agent A
   participant B as Agent B
+  participant C as Local bare cache
   participant O as Git origin
-  A->>O: clone latest
-  B->>O: clone latest
+  A->>O: fetch latest into cache
+  B->>O: fetch latest into cache
+  C-->>A: detached worktree A
+  C-->>B: detached worktree B
   A->>A: claim task T
   B->>B: claim task T
   A->>O: ordinary push
   O-->>A: accepted
   B->>O: ordinary push
   O-->>B: rejected, fetch first
-  B->>O: clone latest and re-evaluate T
+  B->>O: fetch latest and create a new worktree
   O-->>B: T already has owner
   B-->>B: return claim_conflict; do not work
 ```
+
+同一 cache bucket 的跨进程锁只覆盖初始化、fetch 和 worktree add/remove；任务
+判断、commit 与 push 不持锁，因此同机 agent 仍然按远端普通 push 乐观竞争。
+不同 operation 也不写共享 repository 的 `user.name/user.email`，commit identity
+只通过该次 Git 命令传入。每个 operation 在整个生命周期持有唯一 lease；后续
+命令只清理能够非阻塞取得 lease 的 orphan，因此进程崩溃后的 checkout 会被
+回收，同时不会误删仍在运行的并发 worktree。
 
 ### Push 失败不总等于“没抢到”
 

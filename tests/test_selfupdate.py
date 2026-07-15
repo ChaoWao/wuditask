@@ -142,7 +142,11 @@ class SelfUpdateTests(unittest.TestCase):
                 "installed_at": "2026-07-11T12:00:00Z",
             },
         )
-        GitCoordinator(remote=str(hub), branch="main").write(
+        GitCoordinator(
+            remote=str(hub),
+            branch="main",
+            cache_root=self.base / "hub-cache",
+        ).write(
             lambda repository: create_task(
                 repository,
                 spec("Independent task"),

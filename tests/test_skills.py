@@ -106,6 +106,9 @@ class SkillTests(unittest.TestCase):
         )
         self.assertIn("--hub-remote", install)
         self.assertIn("tool_path", install)
+        self.assertIn("hub_cache", install)
+        self.assertIn("XDG_CACHE_HOME", install)
+        self.assertIn("isolated operation worktree", install)
 
 
 if __name__ == "__main__":

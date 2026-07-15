@@ -54,6 +54,7 @@ class GitConcurrencyTests(unittest.TestCase):
         self.client_b = self.base / "client-b"
         git(["clone", str(self.origin), str(self.client_a)], self.base)
         git(["clone", str(self.origin), str(self.client_b)], self.base)
+        self.cache_root = self.base / "cache"
 
     def tearDown(self) -> None:
         self.temporary.cleanup()
@@ -73,12 +74,14 @@ class GitConcurrencyTests(unittest.TestCase):
             GitCoordinator(
                 remote=str(self.origin),
                 branch="main",
+                cache_root=self.cache_root,
                 before_push=before_push,
                 max_attempts=6,
             ),
             GitCoordinator(
                 remote=str(self.origin),
                 branch="main",
+                cache_root=self.cache_root,
                 before_push=before_push,
                 max_attempts=6,
             ),
@@ -120,6 +123,18 @@ class GitConcurrencyTests(unittest.TestCase):
             self.assertFalse(
                 thread.is_alive(), "concurrent Git transaction did not finish"
             )
+        self.assertEqual([], list((self.cache_root / "operations").iterdir()))
+        cache_paths = list((self.cache_root / "hubs").glob("*.git"))
+        self.assertEqual(1, len(cache_paths))
+        identity_config = subprocess.run(
+            ["git", "config", "--local", "--get-regexp", r"^user\."],
+            cwd=cache_paths[0],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(1, identity_config.returncode)
+        self.assertEqual("", identity_config.stdout)
         return results, errors
 
     def _remote_index(self) -> Any:
@@ -138,6 +153,11 @@ class GitConcurrencyTests(unittest.TestCase):
         index = self._remote_index()
         self.assertEqual("alice", index.open[FIRST_ID].task["owner"]["login"])
         self.assertEqual("bob", index.open[SECOND_ID].task["owner"]["login"])
+        authors = git(
+            ["log", "-2", "--format=%an", "refs/heads/main"],
+            self.origin,
+        ).stdout.splitlines()
+        self.assertCountEqual(["alice", "bob"], authors)
 
     def test_same_task_has_exactly_one_confirmed_owner(self) -> None:
         results, errors = self._race(FIRST_ID, FIRST_ID)
@@ -170,6 +190,7 @@ class GitConcurrencyTests(unittest.TestCase):
         coordinator = AmbiguousPushCoordinator(
             remote=str(self.origin),
             branch="main",
+            cache_root=self.cache_root,
         )
         result = coordinator.write(
             lambda repository: claim_task(repository, ACTOR, task_id=FIRST_ID),
@@ -196,7 +217,11 @@ class GitConcurrencyTests(unittest.TestCase):
         tool_head = git(["rev-parse", "HEAD"], tool).stdout.strip()
         hub_head = git(["rev-parse", "refs/heads/queue"], hub).stdout.strip()
 
-        coordinator = GitCoordinator(remote=str(hub), branch="queue")
+        coordinator = GitCoordinator(
+            remote=str(hub),
+            branch="queue",
+            cache_root=self.cache_root,
+        )
         result = coordinator.write(
             lambda repository: create_task(
                 repository,
