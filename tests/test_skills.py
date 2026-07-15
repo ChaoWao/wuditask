@@ -100,6 +100,34 @@ class SkillTests(unittest.TestCase):
         self.assertIn("reinstall_required=true", selfupdate)
         self.assertIn("tool_remote", selfupdate)
         self.assertIn("hub_remote", selfupdate)
+        self.assertIn(
+            "--force-with-lease=refs/heads/<branch>:<observed-oid>",
+            selfupdate,
+        )
+        self.assertIn(
+            "Force-push is permitted only for `tool_remote`",
+            selfupdate,
+        )
+        self.assertIn("Never force-push `hub_remote`", selfupdate)
+        self.assertIn(
+            "A lease rejection must stop the force-push path",
+            selfupdate,
+        )
+        self.assertIn(
+            "Never use bare `--force` or bare `--force-with-lease`",
+            selfupdate,
+        )
+        self.assertIn("canonical repository identity", selfupdate)
+        self.assertIn(
+            "ordinary self-update must remain fail closed",
+            selfupdate,
+        )
+        self.assertIn("separate explicit approval", selfupdate)
+        self.assertIn("user explicitly requested a history rewrite", selfupdate)
+        self.assertIn(
+            "another maintainer's branch, a tag, or a release ref",
+            selfupdate,
+        )
 
         install = (SKILLS_ROOT / "wuditask-install" / "SKILL.md").read_text(
             encoding="utf-8"

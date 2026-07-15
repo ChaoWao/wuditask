@@ -204,6 +204,112 @@ class GitConcurrencyTests(unittest.TestCase):
             self._remote_index().open[FIRST_ID].task["owner"]["login"],
         )
 
+    def test_hub_push_command_never_forces_remote_history(self) -> None:
+        coordinator = GitCoordinator(
+            remote=str(self.origin),
+            branch="main",
+            cache_root=self.cache_root,
+        )
+        commands: list[list[str]] = []
+
+        def capture(
+            command: list[str],
+            *,
+            cwd: Path,
+            allowed: set[int] | None = {0},
+        ) -> subprocess.CompletedProcess[str]:
+            self.assertEqual(self.client_a, cwd)
+            self.assertIsNone(allowed)
+            commands.append(command)
+            return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
+
+        coordinator._run = capture  # type: ignore[method-assign]
+        coordinator._push(self.client_a)
+
+        self.assertEqual(
+            [
+                [
+                    "git",
+                    "-c",
+                    "remote.origin.mirror=false",
+                    "-c",
+                    "push.followTags=false",
+                    "push",
+                    "--no-force",
+                    "--no-force-with-lease",
+                    "--no-mirror",
+                    "--no-follow-tags",
+                    "--",
+                    str(self.origin),
+                    "HEAD:refs/heads/main",
+                ]
+            ],
+            commands,
+        )
+
+    def test_hub_push_disables_inherited_mirror_mode(self) -> None:
+        git(["config", "remote.origin.mirror", "true"], self.client_a)
+        coordinator = GitCoordinator(
+            remote=str(self.origin),
+            branch="main",
+            cache_root=self.cache_root,
+        )
+
+        push = coordinator._push(self.client_a)
+
+        self.assertEqual(0, push.returncode, push.stderr)
+
+    def test_hub_push_does_not_follow_tags_from_git_config(self) -> None:
+        git(["config", "push.followTags", "true"], self.client_a)
+        git(["tag", "-a", "must-not-push", "-m", "local-only tag"], self.client_a)
+        coordinator = GitCoordinator(
+            remote=str(self.origin),
+            branch="main",
+            cache_root=self.cache_root,
+        )
+
+        push = coordinator._push(self.client_a)
+        remote_tag = subprocess.run(
+            ["git", "rev-parse", "--verify", "refs/tags/must-not-push"],
+            cwd=self.origin,
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+
+        self.assertEqual(0, push.returncode, push.stderr)
+        self.assertNotEqual(0, remote_tag.returncode)
+
+    def test_hub_push_ignores_origin_pushurl_override(self) -> None:
+        decoy = self.base / "decoy.git"
+        git(["init", "--bare", "--initial-branch=main", str(decoy)], self.base)
+        git(["config", "remote.origin.pushurl", str(decoy)], self.client_a)
+        git(["config", "user.name", "alice"], self.client_a)
+        git(["config", "user.email", "alice@example.invalid"], self.client_a)
+        (self.client_a / "push-target-marker").write_text("configured hub\n")
+        git(["add", "push-target-marker"], self.client_a)
+        git(["commit", "-m", "advance configured hub"], self.client_a)
+        expected = git(["rev-parse", "HEAD"], self.client_a).stdout.strip()
+        coordinator = GitCoordinator(
+            remote=str(self.origin),
+            branch="main",
+            cache_root=self.cache_root,
+        )
+
+        push = coordinator._push(self.client_a)
+        actual = git(["rev-parse", "refs/heads/main"], self.origin).stdout.strip()
+        decoy_branch = subprocess.run(
+            ["git", "rev-parse", "--verify", "refs/heads/main"],
+            cwd=decoy,
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+
+        self.assertEqual(0, push.returncode, push.stderr)
+        self.assertEqual(expected, actual)
+        self.assertNotEqual(0, decoy_branch.returncode)
+
     def test_remote_write_advances_only_configured_hub_branch(self) -> None:
         hub = make_hub_origin(self.base, name="separate-hub", branch="queue")
         tool = self.base / "tool"

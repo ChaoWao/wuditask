@@ -610,8 +610,23 @@ class GitCoordinator:
 
     def _push(self, checkout: Path) -> subprocess.CompletedProcess[str]:
         assert self.branch is not None
+        assert self.remote is not None
         return self._run(
-            ["git", "push", "origin", f"HEAD:refs/heads/{self.branch}"],
+            [
+                "git",
+                "-c",
+                "remote.origin.mirror=false",
+                "-c",
+                "push.followTags=false",
+                "push",
+                "--no-force",
+                "--no-force-with-lease",
+                "--no-mirror",
+                "--no-follow-tags",
+                "--",
+                self.remote,
+                f"HEAD:refs/heads/{self.branch}",
+            ],
             cwd=checkout,
             allowed=None,
         )

@@ -34,6 +34,16 @@ Task Hub 是任务状态的唯一事实源，只包含：
 `hub_remote/hub_branch`。CLI 不从工具仓的 origin 推断 Hub；Hub 任务提交
 也不会推进工具仓 HEAD。
 
+两套 Git 历史采用不同策略：
+
+| 仓库 | 默认写入 | 历史改写 |
+| --- | --- | --- |
+| Task Hub | 普通 fast-forward push | 服务端禁止 non-fast-forward 和 force push |
+| WudiTask 工具仓 | 普通 push | 明确维护时允许带精确旧 OID 的 `--force-with-lease` |
+
+工具仓的例外只用于代码历史维护，不进入任务并发协议，也不能以 remote 名称、
+本地 clone 或其他配置间接套用到 Task Hub。
+
 `hub.json` 只允许当前工具认识的精确字段和值。缺失、额外字段或版本不匹配
 都会在读写前失败；系统没有旧 Hub fallback 或隐式迁移路径。
 
@@ -55,7 +65,7 @@ commit SHA，使用该版本的 validator 与 `site/` 从已提交 JSON 构建
 `snapshot.json`。`_site` 只作为 artifact 上传，不提交回 Task Hub。即使
 Pages 暂时不可用，CLI 与 Git 协议仍可运行。
 
-## 普通 push 的乐观并发
+## Task Hub 普通 push 的乐观并发
 
 每个远端写命令执行同一套事务：
 
@@ -63,7 +73,8 @@ Pages 暂时不可用，CLI 与 Git 协议仍可运行。
 2. 从 fetch 得到的精确 commit 创建唯一的 detached operation worktree。
 3. 在 worktree 中重新检查 schema、owner、claim 和依赖。
 4. 只修改目标任务文件，并用当前 human identity 创建 Git commit。
-5. 执行普通 `git push`，从不使用 `--force`。
+5. 执行普通 `git push`，显式关闭 force、force-with-lease、mirror 与
+   follow-tags，只推进配置的 Hub branch。
 6. push 成功后返回 `sync.confirmed=true`；工具 clone 不执行 refresh。
 7. 删除 operation worktree；bare cache 继续保留。
 8. 如果因 non-fast-forward 被拒绝，从第 1 步重新 fetch、重新判断并重放。
@@ -95,6 +106,14 @@ sequenceDiagram
 只通过该次 Git 命令传入。每个 operation 在整个生命周期持有唯一 lease；后续
 命令只清理能够非阻塞取得 lease 的 orphan，因此进程崩溃后的 checkout 会被
 回收，同时不会误删仍在运行的并发 worktree。
+
+Hub push 不依赖环境中的 Git 默认值：命令同时覆盖
+`remote.origin.mirror=false`、`push.followTags=false`，并传入
+`--no-force`、`--no-force-with-lease`、`--no-mirror` 与
+`--no-follow-tags`。因此全局或 cache-local Git 配置不能把一次单分支普通
+push 隐式扩大成 mirror、force 更新或额外 tag 写入。push 直接使用配置的
+`hub_remote`，不通过 remote 名 `origin`，因此 `remote.origin.pushurl` 也不能
+把一次已确认任务写入重定向到其他仓库。
 
 ### Push 失败不总等于“没抢到”
 
@@ -134,7 +153,7 @@ archive 是同一事务中的 rename：`data/open/<id>.json` 变为 `data/archiv
 
 系统承诺：
 
-- 不 force-push。
+- 不 force-push Task Hub。
 - 未确认 claim 时 agent 不开工。
 - 每次远端重试都重新检查目标任务，而不是盲目重放旧文本。
 - archive done 必须有完整验收证据。
@@ -154,6 +173,15 @@ Task Hub 的默认分支应允许被授权参与者直接普通 push，因为 cl
 - 不要求每个 task claim 走 pull request。
 
 如果组织策略强制所有修改通过 PR，则本协议不能提供低延迟唯一领取；应改用 GitHub Issues/Projects 的服务端原子 API 或专用协调服务。
+
+这些分支规则只约束 Task Hub。工具仓是可重新发布的代码，默认仍应普通 push，
+但维护者可以在明确审查改写范围后使用
+`--force-with-lease=refs/heads/<branch>:<observed-oid>`。工具仓规则可以保留
+分支删除保护，但不应启用禁止 non-fast-forward 的规则。lease 不匹配时必须
+停止并检查新提交，不能自动更新 expected OID 后重试。比较工具仓与 Hub 时
+必须使用 canonical 仓库身份，不能把同一 GitHub 仓库的 SSH/HTTPS URL 当成
+不同仓库。若配置的工具分支被改写，现有安装的普通 selfupdate 保持
+fail-closed；改写远端历史不隐含 reset 本地安装的授权。
 
 ## 可用性与隐私
 
