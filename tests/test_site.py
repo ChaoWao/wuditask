@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import shutil
+import subprocess
 import tempfile
 import unittest
 from pathlib import Path
@@ -14,6 +16,22 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class SiteTests(unittest.TestCase):
+    @unittest.skipUnless(shutil.which("node"), "Node.js is not available")
+    def test_filter_options_follow_the_active_view(self) -> None:
+        process = subprocess.run(
+            [
+                shutil.which("node") or "node",
+                str(ROOT / "tests" / "site_filter_harness.js"),
+                str(ROOT / "site" / "app.js"),
+            ],
+            cwd=ROOT,
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+
+        self.assertEqual(0, process.returncode, process.stdout + process.stderr)
+
     def test_builds_static_snapshot_without_node(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             base = Path(temporary)

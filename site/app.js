@@ -298,42 +298,67 @@
     }
   }
 
+  function viewTasks() {
+    if (!snapshot) {
+      return [];
+    }
+    return view === "archive" ? snapshot.archived_tasks : snapshot.open_tasks;
+  }
+
   function updateRepositories() {
     var selected = repoFilter.value;
+    var repositories = [];
+    viewTasks().forEach(function (task) {
+      if (repositories.indexOf(task.repo) === -1) {
+        repositories.push(task.repo);
+      }
+    });
+    repositories.sort();
     repoFilter.replaceChildren();
     var all = element("option", "", "All repositories");
     all.value = "";
     repoFilter.appendChild(all);
-    snapshot.repositories.forEach(function (repo) {
+    repositories.forEach(function (repo) {
       var option = element("option", "", repo);
       option.value = repo;
       repoFilter.appendChild(option);
     });
-    if (snapshot.repositories.indexOf(selected) !== -1) {
+    if (repositories.indexOf(selected) !== -1) {
       repoFilter.value = selected;
     }
   }
 
   function updateStateOptions() {
-    var values = view === "open"
-      ? [
-          ["", "All states"],
-          ["ready", "Ready"],
-          ["in_progress", "In progress"],
-          ["blocked", "Blocked"]
-        ]
-      : [
-          ["", "All outcomes"],
-          ["done", "Done"],
-          ["failed", "Failed"],
-          ["cancelled", "Cancelled"]
-        ];
+    var selected = stateFilter.value;
+    var archived = view === "archive";
+    var order = archived
+      ? ["done", "failed", "cancelled"]
+      : ["ready", "in_progress", "blocked"];
+    var present = {};
+    viewTasks().forEach(function (task) {
+      var state = archived ? task.completion.outcome : task.derived.state;
+      present[state] = true;
+    });
+    var values = [["", archived ? "All outcomes" : "All states"]];
+    order.forEach(function (state) {
+      if (present[state]) {
+        values.push([state, displayState(state)]);
+      }
+    });
     stateFilter.replaceChildren();
     values.forEach(function (entry) {
       var option = element("option", "", entry[1]);
       option.value = entry[0];
       stateFilter.appendChild(option);
     });
+    if (present[selected]) {
+      stateFilter.value = selected;
+    }
+  }
+
+  function updateFilters() {
+    updateRepositories();
+    updateStateOptions();
   }
 
   function load(silent) {
@@ -351,7 +376,7 @@
       .then(function (data) {
         snapshot = data;
         updateSummary();
-        updateRepositories();
+        updateFilters();
         render();
       })
       .catch(function (reason) {
@@ -376,7 +401,7 @@
         candidate.classList.toggle("is-active", active);
         candidate.setAttribute("aria-selected", active ? "true" : "false");
       });
-      updateStateOptions();
+      updateFilters();
       render();
     });
   });
@@ -388,7 +413,7 @@
     load(false);
   });
 
-  updateStateOptions();
+  updateFilters();
   load(false);
   window.setInterval(function () {
     load(true);

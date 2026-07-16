@@ -265,7 +265,7 @@ release 只允许当前 GitHub owner 操作。原因进入命令结果与 Git co
 人类打开 GitHub Pages 可以：
 
 - 查看 ready、in progress、blocked 与 archived 数量；
-- 按仓库、状态和关键词过滤；
+- 在当前 Open/Archive 页签内按实际存在的仓库、状态和关键词过滤；
 - 展开 goal、context、验收标准、owner 和依赖；
 - 检查归档 outcome 与 evidence。
 
