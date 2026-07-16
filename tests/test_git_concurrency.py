@@ -261,7 +261,21 @@ class GitConcurrencyTests(unittest.TestCase):
 
     def test_hub_push_does_not_follow_tags_from_git_config(self) -> None:
         git(["config", "push.followTags", "true"], self.client_a)
-        git(["tag", "-a", "must-not-push", "-m", "local-only tag"], self.client_a)
+        git(
+            [
+                "-c",
+                "user.name=WudiTask test",
+                "-c",
+                "user.email=wuditask-test@example.invalid",
+                "tag",
+                "--no-sign",
+                "-a",
+                "must-not-push",
+                "-m",
+                "local-only tag",
+            ],
+            self.client_a,
+        )
         coordinator = GitCoordinator(
             remote=str(self.origin),
             branch="main",
