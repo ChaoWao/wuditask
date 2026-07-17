@@ -33,7 +33,13 @@ from .util import (
     utc_now,
 )
 from .validation import validate_repository
-from .workflow import archive_task, claim_task, create_task, release_task
+from .workflow import (
+    archive_task,
+    claim_task,
+    create_task,
+    delete_archived_tasks,
+    release_task,
+)
 
 HELP_COMMANDS = {
     "add": {
@@ -66,6 +72,14 @@ HELP_COMMANDS = {
         "agent_usage": {
             "codex": "$wuditask-archive",
             "claude": "/wuditask-archive",
+        },
+    },
+    "delete": {
+        "purpose": "Delete explicitly identified erroneous archived records.",
+        "usage": "wuditask delete TASK_ID [TASK_ID ...] --reason TEXT",
+        "agent_usage": {
+            "codex": "$wuditask-delete",
+            "claude": "/wuditask-delete",
         },
     },
     "release": {
@@ -206,6 +220,12 @@ def _parser() -> argparse.ArgumentParser:
         action="append",
         help="Acceptance evidence in AC-N=text form; repeat for each criterion.",
     )
+
+    delete = commands.add_parser(
+        "delete", help="Delete erroneous archived task records."
+    )
+    delete.add_argument("task_ids", nargs="+")
+    delete.add_argument("--reason")
 
     release = commands.add_parser("release", help="Return an owned task to the queue.")
     release.add_argument("task_id")
@@ -761,7 +781,8 @@ def _help(topic: str | None) -> dict[str, Any]:
         "add: record a task with a repository, goal, and acceptance criteria",
         "execute: claim one ready and unowned task; start work only after confirmed push",
         "dep-check: inspect cross-repository blockers and completion evidence",
-        "archive: preserve a done, failed, or cancelled result instead of deleting it",
+        "archive: preserve every ordinary done, failed, or cancelled result",
+        "delete: remove only explicitly identified erroneous archived records",
     ]
     selected = (
         {topic: HELP_COMMANDS[topic]}
@@ -1108,7 +1129,19 @@ def run(args: argparse.Namespace, tool_root: Path) -> dict[str, Any]:
         )
         hub_repo = repo_from_remote(config.hub_remote)
 
-    if args.command in {"add", "execute", "archive", "release"}:
+    if args.command == "delete" and not coordinator.distributed:
+        raise WudiTaskError(
+            "delete_remote_hub_required",
+            "Delete requires the configured remote Hub and does not support --local.",
+            details={
+                "action": (
+                    "Install a remote Hub, then retry without --local so one Git commit "
+                    "is the atomic boundary."
+                )
+            },
+        )
+
+    if args.command in {"add", "execute", "archive", "delete", "release"}:
         if args.actor and coordinator.distributed:
             raise WudiTaskError(
                 "actor_override_local_only",
@@ -1167,6 +1200,21 @@ def run(args: argparse.Namespace, tool_root: Path) -> dict[str, Any]:
                 ),
                 actor,
                 lambda result: f"wuditask: archive {result['task_id']} ({args.outcome})",
+            )
+        if args.command == "delete":
+            return coordinator.write(
+                lambda repository: delete_archived_tasks(
+                    repository,
+                    actor,
+                    args.task_ids,
+                    reason=args.reason,
+                ),
+                actor,
+                lambda result: (
+                    f"wuditask: delete {len(result['deleted_task_ids'])} archived task(s)"
+                    f"\n\nTasks: {', '.join(result['deleted_task_ids'])}"
+                    f"\nReason: {result['reason']}"
+                ),
             )
         return _release_with_delivery(
             coordinator,

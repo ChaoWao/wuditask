@@ -7,7 +7,7 @@ from pathlib import Path
 
 from wuditask.errors import DataValidationError
 from wuditask.repository import HUB_SCHEMA_VERSION, TOOL_API_VERSION, TaskRepository
-from wuditask.util import atomic_write_json
+from wuditask.util import atomic_write_json, deletion_receipt_id
 from wuditask.validation import validate_repository
 from wuditask.workflow import archive_task, claim_task, create_task
 
@@ -37,6 +37,22 @@ class HubContractTests(unittest.TestCase):
         self.assertEqual(set(schema["required"]), set(schema["properties"]))
         self.assertFalse(schema["additionalProperties"])
 
+    def test_public_deletion_receipt_schema_matches_runtime_contract(self) -> None:
+        schema = json.loads(
+            (ROOT / "schemas" / "deletion-receipt.schema.json").read_text(
+                encoding="utf-8"
+            )
+        )
+
+        self.assertEqual(1, schema["properties"]["receipt_version"]["const"])
+        self.assertEqual(
+            "^WDR-[0-9A-F]{24}$",
+            schema["properties"]["id"]["pattern"],
+        )
+        self.assertTrue(schema["properties"]["task_ids"]["uniqueItems"])
+        self.assertEqual(set(schema["required"]), set(schema["properties"]))
+        self.assertFalse(schema["additionalProperties"])
+
     def test_missing_manifest_is_not_treated_as_an_empty_hub(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             repository = TaskRepository(Path(temporary))
@@ -49,7 +65,8 @@ class HubContractTests(unittest.TestCase):
     def test_manifest_requires_exact_current_versions(self) -> None:
         invalid_manifests = (
             {"schema_version": 2, "tool_api_version": 1},
-            {"schema_version": 1, "tool_api_version": 2},
+            {"schema_version": 2, "tool_api_version": 2},
+            {"schema_version": 1, "tool_api_version": 3},
             {
                 "schema_version": 1,
                 "tool_api_version": 1,
@@ -79,7 +96,7 @@ class HubContractTests(unittest.TestCase):
             repository.initialize()
 
         self.assertEqual(
-            first, '{\n  "schema_version": 2,\n  "tool_api_version": 2\n}\n'
+            first, '{\n  "schema_version": 2,\n  "tool_api_version": 3\n}\n'
         )
 
     def test_symlinked_data_path_is_rejected_before_writing(self) -> None:
@@ -104,6 +121,71 @@ class HubContractTests(unittest.TestCase):
 
             self.assertEqual("data/open", raised.exception.details["issues"][0]["path"])
             self.assertEqual([], list(target.iterdir()))
+
+    def test_deletion_receipt_and_live_task_may_not_share_an_id(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            repository = TaskRepository(Path(temporary))
+            repository.initialize()
+            task_id = "WDT-20260711T120007Z-888888"
+            add_task(repository, task_id)
+            reason = "This fixture should not coexist with a live task."
+            receipt_id = deletion_receipt_id(
+                [task_id],
+                reason,
+                ACTOR.github_id,
+            )
+            atomic_write_json(
+                repository.deletions_dir / f"{receipt_id}.json",
+                {
+                    "receipt_version": 1,
+                    "id": receipt_id,
+                    "task_ids": [task_id],
+                    "reason": reason,
+                    "deleted_by": ACTOR.as_dict(),
+                    "deleted_at": "2026-07-11T12:00:07Z",
+                },
+            )
+
+            with self.assertRaises(DataValidationError) as raised:
+                repository.load_index()
+
+            self.assertTrue(
+                any(
+                    "deleted task ID still exists" in issue["message"]
+                    for issue in raised.exception.details["issues"]
+                )
+            )
+
+    def test_deletion_receipt_must_match_its_canonical_fields(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            repository = TaskRepository(Path(temporary))
+            repository.initialize()
+            atomic_write_json(
+                repository.deletions_dir / "WDR-000000000000000000000000.json",
+                {
+                    "receipt_version": 1,
+                    "id": "WDR-000000000000000000000000",
+                    "task_ids": ["WDT-20260711T120007Z-888888"],
+                    "reason": " Not canonical ",
+                    "deleted_by": ACTOR.as_dict(),
+                    "deleted_at": "2026-07-11T12:00:07Z",
+                },
+            )
+
+            with self.assertRaises(DataValidationError) as raised:
+                repository.load_deletion_receipts()
+
+            issue_paths = {
+                issue["path"] for issue in raised.exception.details["issues"]
+            }
+            self.assertIn(
+                "data/deletions/WDR-000000000000000000000000.json:$.reason",
+                issue_paths,
+            )
+            self.assertIn(
+                "data/deletions/WDR-000000000000000000000000.json:$.id",
+                issue_paths,
+            )
 
     def test_archived_tasks_must_have_valid_dependency_references(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

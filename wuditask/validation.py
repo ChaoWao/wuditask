@@ -36,4 +36,5 @@ def validate_repository(repository: TaskRepository) -> dict[str, Any]:
         "message": "All task data and dependency references are valid.",
         "open": len(index.open),
         "archived": len(index.archived),
+        "deletions": len(repository.load_deletion_receipts()),
     }

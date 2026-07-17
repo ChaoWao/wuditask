@@ -1,0 +1,62 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:wuditask:schema:deletion-receipt:v1",
+  "title": "WudiTask deletion receipt",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "receipt_version",
+    "id",
+    "task_ids",
+    "reason",
+    "deleted_by",
+    "deleted_at"
+  ],
+  "properties": {
+    "receipt_version": {
+      "const": 1
+    },
+    "id": {
+      "type": "string",
+      "pattern": "^WDR-[0-9A-F]{24}$"
+    },
+    "task_ids": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": {
+        "type": "string",
+        "pattern": "^WDT-[0-9]{8}T[0-9]{6}Z-[0-9A-F]{6}$"
+      }
+    },
+    "reason": {
+      "type": "string",
+      "minLength": 1
+    },
+    "deleted_by": {
+      "$ref": "#/$defs/identity"
+    },
+    "deleted_at": {
+      "type": "string",
+      "format": "date-time",
+      "pattern": "Z$"
+    }
+  },
+  "$defs": {
+    "identity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["login", "github_id"],
+      "properties": {
+        "login": {
+          "type": "string",
+          "minLength": 1
+        },
+        "github_id": {
+          "type": "integer",
+          "minimum": 1
+        }
+      }
+    }
+  }
+}

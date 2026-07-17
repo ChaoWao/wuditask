@@ -16,6 +16,7 @@ from .validation import validate_repository
 REQUIRED_SKILL_NAMES = {
     "wuditask-add",
     "wuditask-archive",
+    "wuditask-delete",
     "wuditask-dep-check",
     "wuditask-execute",
     "wuditask-install",

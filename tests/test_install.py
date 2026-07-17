@@ -17,6 +17,7 @@ ROOT = Path(__file__).resolve().parents[1]
 EXPECTED_SKILLS = {
     "wuditask-add",
     "wuditask-archive",
+    "wuditask-delete",
     "wuditask-dep-check",
     "wuditask-execute",
     "wuditask-install",

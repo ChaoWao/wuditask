@@ -28,5 +28,6 @@ than collapsing them into one status:
 
 Treat `delivery_unavailable` as unknown, not as unassigned or ready. Use the
 operation-specific skill for any follow-up mutation: execute/release for a
-lease, archive for a verified outcome, and normal GitHub workflows for Issue or
-pull-request changes.
+lease, archive for a verified outcome, delete only for an explicitly identified
+erroneous archive, and normal GitHub workflows for Issue or pull-request
+changes.

@@ -10,6 +10,7 @@ SKILLS_ROOT = ROOT / ".agents" / "skills"
 EXPECTED_SKILLS = {
     "wuditask-add",
     "wuditask-archive",
+    "wuditask-delete",
     "wuditask-dep-check",
     "wuditask-execute",
     "wuditask-install",
@@ -76,6 +77,18 @@ class SkillTests(unittest.TestCase):
         self.assertIn("read-only `list` command", task_list)
         self.assertIn("read-only `show` command", task_show)
 
+    def test_delete_is_explicit_and_preserves_dependency_integrity(self) -> None:
+        delete = (SKILLS_ROOT / "wuditask-delete" / "SKILL.md").read_text()
+        self.assertIn("explicitly", delete)
+        self.assertIn("--reason", delete)
+        self.assertIn("reverse dependency", delete)
+        self.assertIn("data/deletions/", delete)
+        self.assertIn("Git history", delete)
+        self.assertIn("not erased", delete)
+        self.assertIn("absence alone is never confirmation", delete)
+        self.assertIn("Never add `--local`", delete)
+        self.assertIn("sync.confirmed=true", delete)
+
     def test_add_and_selfupdate_policy_invariants(self) -> None:
         add = (SKILLS_ROOT / "wuditask-add" / "SKILL.md").read_text(encoding="utf-8")
         self.assertIn("canonical source", add)
@@ -94,7 +107,7 @@ class SkillTests(unittest.TestCase):
             selfupdate,
         )
         self.assertIn(
-            "Do not run WudiTask `add`, `execute`, `archive`, or `release`",
+            "Do not run WudiTask `add`, `execute`, `archive`, `delete`, or `release`",
             selfupdate,
         )
         self.assertIn("~/.wuditask/worktrees/<slug>", selfupdate)

@@ -17,7 +17,14 @@ from .model import (
     require_valid_task,
 )
 from .repository import TaskRepository
-from .util import new_claim_token, new_task_id, normalize_repo, utc_now
+from .util import (
+    TASK_ID_RE,
+    deletion_receipt_id,
+    new_claim_token,
+    new_task_id,
+    normalize_repo,
+    utc_now,
+)
 
 
 def _spec_missing(spec: dict[str, Any]) -> tuple[list[str], list[str]]:
@@ -157,6 +164,17 @@ def create_task(
             details={
                 "task_id": task["id"],
                 "location": "archive" if existing.archived else "open",
+            },
+            exit_code=3,
+        )
+    deletion_receipt = repository.deletion_receipt_for_task(task["id"])
+    if deletion_receipt is not None:
+        raise WudiTaskError(
+            "task_id_deleted",
+            f"Task ID {task['id']} is reserved by a deletion receipt.",
+            details={
+                "task_id": task["id"],
+                "deletion_receipt": deletion_receipt["id"],
             },
             exit_code=3,
         )
@@ -561,6 +579,157 @@ def archive_task(
         "changed": True,
         "delivery": delivery,
         "message": f"Archived {task_id} with outcome {outcome}.",
+    }
+
+
+def delete_archived_tasks(
+    repository: TaskRepository,
+    actor: Identity,
+    task_ids: list[str],
+    *,
+    reason: str | None,
+    now: str | None = None,
+) -> dict[str, Any]:
+    if not isinstance(reason, str) or not reason.strip():
+        raise WudiTaskError(
+            "delete_reason_required",
+            "Deleting archived tasks requires a concrete reason.",
+            details={"question": "Why are these archived records erroneous?"},
+        )
+    if not task_ids:
+        raise WudiTaskError(
+            "archived_task_ids_required",
+            "Deleting archived tasks requires at least one exact task ID.",
+        )
+    invalid = [task_id for task_id in task_ids if not TASK_ID_RE.fullmatch(task_id)]
+    if invalid:
+        raise WudiTaskError(
+            "invalid_task_id",
+            "Every delete target must be a WudiTask ID.",
+            details={"values": invalid},
+        )
+    duplicates = sorted(
+        task_id for task_id in set(task_ids) if task_ids.count(task_id) > 1
+    )
+    if duplicates:
+        raise WudiTaskError(
+            "duplicate_task_id",
+            "Each archived task ID may appear only once in a delete batch.",
+            details={"values": duplicates},
+        )
+
+    reason = reason.strip()
+    canonical_task_ids = sorted(task_ids)
+    receipt_id = deletion_receipt_id(
+        canonical_task_ids,
+        reason,
+        actor.github_id,
+    )
+    index = repository.load_index()
+    receipts = repository.load_deletion_receipts()
+    existing_receipt = receipts.get(receipt_id)
+    if existing_receipt is not None:
+        recreated = [task_id for task_id in canonical_task_ids if index.get(task_id)]
+        if recreated:
+            raise WudiTaskError(
+                "deleted_task_recreated",
+                "A task covered by this deletion receipt exists again.",
+                details={
+                    "receipt_id": receipt_id,
+                    "task_ids": recreated,
+                },
+                exit_code=3,
+            )
+        return {
+            "deleted_task_ids": canonical_task_ids,
+            "deletion_receipt": existing_receipt,
+            "deleted_by": existing_receipt["deleted_by"],
+            "reason": existing_receipt["reason"],
+            "confirmed": True,
+            "already_deleted": True,
+            "changed": False,
+            "message": f"{len(canonical_task_ids)} archived task(s) were already deleted by this operation.",
+        }
+
+    invalid_targets = []
+    for task_id in canonical_task_ids:
+        if task_id in index.archived:
+            continue
+        invalid_targets.append(
+            {
+                "task_id": task_id,
+                "location": "open" if task_id in index.open else "missing",
+            }
+        )
+    if invalid_targets:
+        raise WudiTaskError(
+            "archived_tasks_required",
+            "Delete accepts only existing archived tasks.",
+            details={"targets": invalid_targets},
+            exit_code=3,
+        )
+
+    target_set = set(canonical_task_ids)
+    dependent_map: dict[str, list[dict[str, str]]] = {
+        task_id: [] for task_id in canonical_task_ids
+    }
+    for dependent_id, record in index.all.items():
+        if dependent_id in target_set:
+            continue
+        for target_id in target_set.intersection(record.task.get("dependencies", [])):
+            dependent_map[target_id].append(
+                {
+                    "task_id": dependent_id,
+                    "location": "archive" if record.archived else "open",
+                    "repo": record.task["repo"],
+                }
+            )
+    blocked_targets = [
+        {
+            "task_id": task_id,
+            "dependents": sorted(
+                dependents,
+                key=lambda item: (item["location"], item["task_id"]),
+            ),
+        }
+        for task_id, dependents in dependent_map.items()
+        if dependents
+    ]
+    if blocked_targets:
+        raise WudiTaskError(
+            "task_has_dependents",
+            "Archived tasks cannot be deleted while other tasks depend on them.",
+            details={"targets": blocked_targets},
+            exit_code=3,
+        )
+
+    deleted_tasks = [
+        {
+            "id": task_id,
+            "title": index.archived[task_id].task["title"],
+            "outcome": index.archived[task_id].task["completion"]["outcome"],
+        }
+        for task_id in canonical_task_ids
+    ]
+    receipt = {
+        "receipt_version": 1,
+        "id": receipt_id,
+        "task_ids": canonical_task_ids,
+        "reason": reason,
+        "deleted_by": actor.as_dict(),
+        "deleted_at": now or utc_now(),
+    }
+    repository.delete_archived(canonical_task_ids, receipt)
+    return {
+        "deleted_task_ids": canonical_task_ids,
+        "deleted_tasks": deleted_tasks,
+        "deletion_receipt": receipt,
+        "deleted_by": actor.as_dict(),
+        "reason": reason,
+        "confirmed": True,
+        "already_deleted": False,
+        "changed": True,
+        "message": f"Deleted {len(canonical_task_ids)} archived task(s).",
     }
 
 

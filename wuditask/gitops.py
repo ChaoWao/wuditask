@@ -225,6 +225,10 @@ class GitCoordinator:
                         "attempts": attempt,
                         "remote": self.remote,
                         "branch": self.branch,
+                        "commit": self._run(
+                            ["git", "rev-parse", "HEAD"],
+                            cwd=checkout,
+                        ).stdout.strip(),
                     }
                     return result
                 self._run(["git", "add", "-A", "--", "data"], cwd=checkout)
@@ -277,6 +281,10 @@ class GitCoordinator:
                     time.sleep(0.04 * attempt)
                     continue
                 if self._remote_matches(result):
+                    confirmed_commit = result.pop(
+                        "_remote_confirmation_commit",
+                        commit,
+                    )
                     result["sync"] = {
                         "mode": "remote",
                         "confirmed": True,
@@ -284,7 +292,7 @@ class GitCoordinator:
                         "attempts": attempt,
                         "remote": self.remote,
                         "branch": self.branch,
-                        "commit": commit,
+                        "commit": confirmed_commit,
                     }
                     return result
                 raise WudiTaskError(
@@ -295,6 +303,12 @@ class GitCoordinator:
                         "branch": self.branch,
                         "output": combined,
                         "task_id": result.get("task_id"),
+                        "task_ids": result.get("deleted_task_ids"),
+                        "deletion_receipt": (
+                            result.get("deletion_receipt", {}).get("id")
+                            if isinstance(result.get("deletion_receipt"), dict)
+                            else None
+                        ),
                         "claim_token": (
                             result.get("task", {}).get("claim", {}).get("token")
                             if isinstance(result.get("task"), dict)
@@ -634,12 +648,45 @@ class GitCoordinator:
     def _remote_matches(self, result: dict[str, Any]) -> bool:
         expected = result.get("task")
         task_id = result.get("task_id")
-        if not isinstance(expected, dict) or not isinstance(task_id, str):
+        deleted_task_ids = result.get("deleted_task_ids")
+        deletion_receipt = result.get("deletion_receipt")
+        expects_deletion = (
+            isinstance(deleted_task_ids, list)
+            and bool(deleted_task_ids)
+            and all(isinstance(value, str) for value in deleted_task_ids)
+            and isinstance(deletion_receipt, dict)
+            and isinstance(deletion_receipt.get("id"), str)
+        )
+        expects_task = isinstance(expected, dict) and isinstance(task_id, str)
+        if not expects_task and not expects_deletion:
             return False
         try:
             with self._remote_worktree("confirm") as checkout:
-                record = TaskRepository(checkout).load_index().get(task_id)
-                return record is not None and record.task == expected
+                index = TaskRepository(checkout).load_index()
+                if expects_deletion:
+                    repository = TaskRepository(checkout)
+                    receipts = repository.load_deletion_receipts()
+                    remote_receipt = receipts.get(deletion_receipt["id"])
+                    if remote_receipt is None or not all(
+                        index.get(value) is None for value in deleted_task_ids
+                    ):
+                        return False
+                    result["deletion_receipt"] = remote_receipt
+                    result["deleted_by"] = remote_receipt["deleted_by"]
+                    result["reason"] = remote_receipt["reason"]
+                    result["_remote_confirmation_commit"] = self._run(
+                        ["git", "rev-parse", "HEAD"],
+                        cwd=checkout,
+                    ).stdout.strip()
+                    return True
+                record = index.get(task_id)
+                if record is None or record.task != expected:
+                    return False
+                result["_remote_confirmation_commit"] = self._run(
+                    ["git", "rev-parse", "HEAD"],
+                    cwd=checkout,
+                ).stdout.strip()
+                return True
         except WudiTaskError:
             return False
 

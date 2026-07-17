@@ -6,6 +6,9 @@ description: Archive a WudiTask as done, failed, or cancelled. Use when the user
 # Archive a WudiTask
 
 Use the registered WudiTask CLI. Do not edit, move, or delete task JSON directly.
+Ordinary done, failed, and cancelled outcomes remain archived. Only when the
+user explicitly identifies an already archived record as erroneous, switch to
+`$wuditask-delete` or `/wuditask-delete`; do not overload this workflow.
 
 ## Locate the CLI
 

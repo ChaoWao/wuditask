@@ -1,0 +1,4 @@
+interface:
+  display_name: "Delete Archived WudiTask"
+  short_description: "Delete erroneous archived tasks safely"
+  default_prompt: "Use $wuditask-delete to remove mistakenly created archived tasks safely."

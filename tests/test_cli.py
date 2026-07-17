@@ -143,6 +143,26 @@ class CliTests(unittest.TestCase):
             self.assertEqual(0, archived.returncode, archived.stderr)
             self.assertTrue(json.loads(archived.stdout)["confirmed"])
 
+            deleted = self.run_cli(
+                hub,
+                "delete",
+                "WDT-20260711T120000Z-A1B2C3",
+                "--reason",
+                "The lifecycle fixture is not real work.",
+            )
+            self.assertNotEqual(0, deleted.returncode)
+            delete_payload = json.loads(deleted.stdout)
+            self.assertFalse(delete_payload["ok"])
+            self.assertEqual(
+                "delete_remote_hub_required",
+                delete_payload["error"]["code"],
+            )
+            self.assertIn(
+                "WDT-20260711T120000Z-A1B2C3",
+                TaskRepository(hub).load_index().archived,
+            )
+            self.assertEqual({}, TaskRepository(hub).load_deletion_receipts())
+
     def test_add_parses_hub_fallback_source_separately_from_execution_repo(
         self,
     ) -> None:
@@ -636,6 +656,7 @@ class CliTests(unittest.TestCase):
             "execute": ("codex", "$wuditask-execute"),
             "dep-check": ("codex", "$wuditask-dep-check"),
             "archive": ("codex", "$wuditask-archive"),
+            "delete": ("codex", "$wuditask-delete"),
             "release": ("codex", "$wuditask-release"),
             "list": ("codex", "$wuditask-list"),
             "show": ("codex", "$wuditask-show"),
@@ -680,7 +701,7 @@ class CliTests(unittest.TestCase):
         )
 
         self.assertEqual(0, result.returncode, result.stderr)
-        self.assertEqual("wuditask 0.4.0", result.stdout.strip())
+        self.assertEqual("wuditask 0.5.0", result.stdout.strip())
 
 
 if __name__ == "__main__":

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import re
@@ -13,6 +14,7 @@ from urllib.parse import urlparse
 from .errors import WudiTaskError
 
 TASK_ID_RE = re.compile(r"^WDT-\d{8}T\d{6}Z-[0-9A-F]{6}$")
+DELETION_RECEIPT_ID_RE = re.compile(r"^WDR-[0-9A-F]{24}$")
 REPO_RE = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
 UTC_RE = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$")
 
@@ -30,6 +32,25 @@ def new_task_id(now: str | None = None) -> str:
 
 def new_claim_token() -> str:
     return uuid.uuid4().hex
+
+
+def deletion_receipt_id(
+    task_ids: list[str],
+    reason: str,
+    github_id: int,
+) -> str:
+    payload = json.dumps(
+        {
+            "github_id": github_id,
+            "reason": reason.strip(),
+            "task_ids": sorted(task_ids),
+        },
+        ensure_ascii=False,
+        separators=(",", ":"),
+        sort_keys=True,
+    )
+    digest = hashlib.sha256(payload.encode("utf-8")).hexdigest()[:24].upper()
+    return f"WDR-{digest}"
 
 
 def timestamp_from_task_id(task_id: str) -> str | None:
