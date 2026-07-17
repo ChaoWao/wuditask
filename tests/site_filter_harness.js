@@ -271,6 +271,10 @@ async function main() {
   assert.deepEqual(optionValues(elements["repo-filter"]), ["", "open/repo"]);
   assert.deepEqual(optionValues(elements["state-filter"]), ["", "ready"]);
   assert.deepEqual(optionValues(elements["delivery-filter"]), ["", "review"]);
+  const openSummary = elements["task-list"].children[0].children[0];
+  assert.equal(openSummary.children.length, 7);
+  assert.match(renderedText(openSummary.children[3]), /alice, bob/);
+  assert.match(renderedText(openSummary.children[4]), /runner/);
   assert.match(renderedText(elements["task-list"]), /Canonical open task/);
   assert.match(renderedText(elements["task-list"]), /alice, bob/);
   assert.match(renderedText(elements["task-list"]), /runner/);
@@ -296,6 +300,9 @@ async function main() {
   elements.search.listeners.input();
 
   archiveButton.listeners.click();
+  const archivedSummary = elements["task-list"].children[0].children[0];
+  assert.match(renderedText(archivedSummary.children[3]), /carol/);
+  assert.match(renderedText(archivedSummary.children[4]), /Finished/);
   assert.deepEqual(optionValues(elements["repo-filter"]), ["", "archive/repo"]);
   assert.deepEqual(optionValues(elements["state-filter"]), ["", "done"]);
   assert.deepEqual(optionValues(elements["delivery-filter"]), ["", "ready_to_merge"]);
@@ -323,6 +330,14 @@ async function main() {
   assert.deepEqual(optionValues(elements["state-filter"]), ["", "blocked"]);
   assert.equal(elements["state-filter"].value, "");
 
+  currentSnapshot.open_tasks[0].delivery.owners = [];
+  elements.refresh.listeners.click();
+  await settle();
+  assert.match(
+    renderedText(elements["task-list"].children[0].children[0].children[3]),
+    /Unassigned/
+  );
+
   currentSnapshot = snapshot("unknown/repo", "ready");
   currentSnapshot.open_tasks[0].delivery.status = "unavailable";
   currentSnapshot.open_tasks[0].delivery.delivery_state = "unavailable";
@@ -330,6 +345,10 @@ async function main() {
   currentSnapshot.open_tasks[0].delivery.error = "GitHub API unavailable";
   elements.refresh.listeners.click();
   await settle();
+  assert.match(
+    renderedText(elements["task-list"].children[0].children[0].children[3]),
+    /Unknown/
+  );
   assert.match(renderedText(elements["task-list"]), /Unknown/);
   assert.doesNotMatch(renderedText(elements["task-list"]), /Unassigned/);
 }

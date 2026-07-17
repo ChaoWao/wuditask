@@ -225,6 +225,11 @@ class SiteTests(unittest.TestCase):
             self.assertEqual(expected_files, set(result["files"]))
             self.assertEqual(expected_files, {path.name for path in output.iterdir()})
 
+            index = (output / "index.html").read_text(encoding="utf-8")
+            self.assertIn("<span>Owner</span>", index)
+            self.assertIn("<span>Agent</span>", index)
+            self.assertLess(index.index("<span>Owner</span>"), index.index("<span>Agent</span>"))
+
             install = (output / "install.html").read_text(encoding="utf-8")
             self.assertIn('<html lang="zh-CN">', install)
             self.assertIn("<h1>安装与使用 WudiTask</h1>", install)
@@ -351,6 +356,23 @@ class SiteTests(unittest.TestCase):
                             if link["current"] == "page"
                         ],
                     )
+
+    def test_responsive_task_summary_never_hides_detail_owners(self) -> None:
+        styles = (ROOT / "site" / "styles.css").read_text(encoding="utf-8")
+        hidden_selectors: set[str] = set()
+        for rule in styles.split("}"):
+            if "{" not in rule:
+                continue
+            selectors, declarations = rule.rsplit("{", 1)
+            if "display:none" not in declarations.replace(" ", "").replace("\n", ""):
+                continue
+            hidden_selectors.update(selector.strip() for selector in selectors.split(","))
+
+        self.assertNotIn(".owner", hidden_selectors)
+        tablet = styles.split("@media (max-width: 1080px)", 1)[1].split("@media", 1)[0]
+        self.assertIn(".task-summary .summary-agent", tablet)
+        mobile = styles.split("@media (max-width: 620px)", 1)[1].split("@media", 1)[0]
+        self.assertIn(".task-summary .summary-owner", mobile)
 
     def test_markdown_renderer_escapes_html_and_rejects_unsafe_links(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

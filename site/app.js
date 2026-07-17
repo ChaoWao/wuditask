@@ -67,9 +67,9 @@
     return result;
   }
 
-  function identityNode(logins, emptyLabel) {
+  function identityNode(logins, emptyLabel, extraClass) {
     var names = uniqueLogins(logins);
-    var wrapper = element("span", "owner");
+    var wrapper = element("span", "owner" + (extraClass ? " " + extraClass : ""));
     if (!names.length) {
       wrapper.appendChild(element("span", "owner-placeholder", "-"));
       wrapper.appendChild(element("span", "owner-name", emptyLabel));
@@ -91,6 +91,10 @@
 
   function owners(task) {
     return uniqueLogins(task.delivery && task.delivery.owners);
+  }
+
+  function ownerEmptyLabel(task) {
+    return task.delivery && task.delivery.status === "fresh" ? "Unassigned" : "Unknown";
   }
 
   function statusNode(state) {
@@ -165,10 +169,8 @@
   function appendOwnership(parent, task) {
     var ownerNames = owners(task);
     var agentNames = activeLogins(task);
-    var ownerEmptyLabel =
-      task.delivery && task.delivery.status === "fresh" ? "Unassigned" : "Unknown";
     parent.appendChild(element("span", "verification", "Owners"));
-    parent.appendChild(identityNode(ownerNames, ownerEmptyLabel));
+    parent.appendChild(identityNode(ownerNames, ownerEmptyLabel(task)));
     parent.appendChild(element("span", "verification", "Active agents"));
     parent.appendChild(identityNode(agentNames, "No active agent"));
   }
@@ -331,7 +333,10 @@
     name.appendChild(element("span", "task-id", task.id));
     summary.appendChild(name);
     summary.appendChild(element("span", "repo-name", task.repo));
-    summary.appendChild(identityNode(activeLogins(task), archived ? "Finished" : "Idle"));
+    summary.appendChild(identityNode(owners(task), ownerEmptyLabel(task), "summary-owner"));
+    summary.appendChild(
+      identityNode(activeLogins(task), archived ? "Finished" : "Idle", "summary-agent")
+    );
     summary.appendChild(statusNode(state));
     summary.appendChild(statusNode(deliveryState(task)));
     details.appendChild(summary);

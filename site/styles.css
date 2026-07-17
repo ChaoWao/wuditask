@@ -346,7 +346,7 @@ a {
 .list-heading,
 .task-summary {
   display: grid;
-  grid-template-columns: 64px minmax(230px, 2.2fr) minmax(140px, 1fr) minmax(120px, 0.8fr) 105px 130px;
+  grid-template-columns: 64px minmax(200px, 2fr) minmax(130px, 0.9fr) minmax(120px, 0.8fr) minmax(120px, 0.8fr) 105px 130px;
   gap: 16px;
   align-items: center;
 }
@@ -1174,6 +1174,22 @@ footer {
   margin-top: 0;
 }
 
+@media (max-width: 1080px) {
+  .list-heading {
+    display: none;
+  }
+
+  .task-summary {
+    grid-template-columns: 56px minmax(0, 1fr) minmax(110px, 0.8fr) 100px 120px;
+    gap: 10px;
+  }
+
+  .task-summary .repo-name,
+  .task-summary .summary-agent {
+    display: none;
+  }
+}
+
 .visually-hidden {
   position: absolute;
   width: 1px;
@@ -1213,10 +1229,6 @@ footer {
     width: min(320px, 42vw);
   }
 
-  .list-heading {
-    display: none;
-  }
-
   .workflow-stage-track {
     grid-template-columns: 1fr;
     gap: 28px;
@@ -1236,16 +1248,6 @@ footer {
 
   .workflow-decision-card header {
     min-height: 0;
-  }
-
-  .task-summary {
-    grid-template-columns: 56px minmax(0, 1fr) 100px 120px;
-    gap: 10px;
-  }
-
-  .repo-name,
-  .owner {
-    display: none;
   }
 
   .state {
@@ -1399,6 +1401,10 @@ footer {
   .task-summary {
     grid-template-columns: 44px minmax(0, 1fr) 80px 96px;
     gap: 8px;
+  }
+
+  .task-summary .summary-owner {
+    display: none;
   }
 
   .task-title {
