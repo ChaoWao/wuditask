@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+import html
+import re
 import shutil
 from collections.abc import Callable, Mapping
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit
 
 from .dependencies import dependency_report, task_dependency_report
 from .errors import WudiTaskError
@@ -13,6 +16,162 @@ from .util import atomic_write_json, utc_now
 
 
 DeliveryFetcher = Callable[[Mapping[str, Any]], dict[str, Any]]
+
+INSTALL_CONTENT_MARKER = "<!-- WUDITASK_INSTALL_CONTENT -->"
+_HEADING_RE = re.compile(r"^(#{1,6})\s+(.+?)\s*$")
+_UNORDERED_ITEM_RE = re.compile(r"^\s*[-*+]\s+(.+?)\s*$")
+_ORDERED_ITEM_RE = re.compile(r"^\s*\d+[.)]\s+(.+?)\s*$")
+_INLINE_RE = re.compile(r"`([^`\n]+)`|\[([^\]\n]+)\]\(([^)\n]+)\)")
+_LANGUAGE_RE = re.compile(r"^[A-Za-z0-9_+-]+$")
+
+_COPIED_SITE_ASSETS = (
+    "index.html",
+    "styles.css",
+    "app.js",
+    "dag.html",
+    "dag.js",
+    "install.md",
+)
+_SITE_SOURCE_FILES = (*_COPIED_SITE_ASSETS, "install.template.html")
+_GENERATED_SITE_FILES = (
+    "install.html",
+    "snapshot.json",
+    ".nojekyll",
+    ".wuditask-site",
+)
+
+
+def _safe_link_target(value: str) -> bool:
+    target = value.strip()
+    if not target or any(ord(character) < 32 for character in target):
+        return False
+    parsed = urlsplit(target)
+    if parsed.scheme:
+        return parsed.scheme.lower() in {"http", "https"}
+    return not target.startswith("//")
+
+
+def _render_inline(value: str) -> str:
+    rendered: list[str] = []
+    cursor = 0
+    for match in _INLINE_RE.finditer(value):
+        rendered.append(html.escape(value[cursor : match.start()]))
+        code = match.group(1)
+        if code is not None:
+            rendered.append(f"<code>{html.escape(code)}</code>")
+        else:
+            label = match.group(2) or ""
+            target = (match.group(3) or "").strip()
+            if _safe_link_target(target):
+                rendered.append(
+                    f'<a href="{html.escape(target, quote=True)}">'
+                    f"{html.escape(label)}</a>"
+                )
+            else:
+                rendered.append(html.escape(match.group(0)))
+        cursor = match.end()
+    rendered.append(html.escape(value[cursor:]))
+    return "".join(rendered)
+
+
+def _starts_block(line: str) -> bool:
+    return bool(
+        line.startswith("```")
+        or _HEADING_RE.fullmatch(line)
+        or _UNORDERED_ITEM_RE.fullmatch(line)
+        or _ORDERED_ITEM_RE.fullmatch(line)
+    )
+
+
+def _render_markdown(markdown: str) -> str:
+    """Render the deliberately small, raw-HTML-free install-guide subset."""
+
+    lines = markdown.splitlines()
+    rendered: list[str] = []
+    index = 0
+    while index < len(lines):
+        line = lines[index]
+        if not line.strip():
+            index += 1
+            continue
+
+        if line.startswith("```"):
+            language = line[3:].strip()
+            code_lines: list[str] = []
+            index += 1
+            while index < len(lines) and not lines[index].startswith("```"):
+                code_lines.append(lines[index])
+                index += 1
+            if index < len(lines):
+                index += 1
+            language_class = (
+                f' class="language-{language}"'
+                if language and _LANGUAGE_RE.fullmatch(language)
+                else ""
+            )
+            code = html.escape("\n".join(code_lines))
+            rendered.append(f"<pre><code{language_class}>{code}</code></pre>")
+            continue
+
+        heading = _HEADING_RE.fullmatch(line)
+        if heading:
+            level = len(heading.group(1))
+            rendered.append(f"<h{level}>{_render_inline(heading.group(2))}</h{level}>")
+            index += 1
+            continue
+
+        unordered = _UNORDERED_ITEM_RE.fullmatch(line)
+        if unordered:
+            items = []
+            while index < len(lines):
+                item = _UNORDERED_ITEM_RE.fullmatch(lines[index])
+                if item is None:
+                    break
+                items.append(f"<li>{_render_inline(item.group(1))}</li>")
+                index += 1
+            rendered.append("<ul>\n" + "\n".join(items) + "\n</ul>")
+            continue
+
+        ordered = _ORDERED_ITEM_RE.fullmatch(line)
+        if ordered:
+            items = []
+            while index < len(lines):
+                item = _ORDERED_ITEM_RE.fullmatch(lines[index])
+                if item is None:
+                    break
+                items.append(f"<li>{_render_inline(item.group(1))}</li>")
+                index += 1
+            rendered.append("<ol>\n" + "\n".join(items) + "\n</ol>")
+            continue
+
+        paragraph = [line.strip()]
+        index += 1
+        while (
+            index < len(lines)
+            and lines[index].strip()
+            and not _starts_block(lines[index])
+        ):
+            paragraph.append(lines[index].strip())
+            index += 1
+        rendered.append(f"<p>{_render_inline(' '.join(paragraph))}</p>")
+
+    return "\n".join(rendered)
+
+
+def _render_install_page(source: Path) -> str:
+    template = (source / "install.template.html").read_text(encoding="utf-8")
+    marker_count = template.count(INSTALL_CONTENT_MARKER)
+    if marker_count != 1:
+        raise WudiTaskError(
+            "site_install_template_invalid",
+            "Install page template must contain exactly one content marker.",
+            details={
+                "marker": INSTALL_CONTENT_MARKER,
+                "marker_count": marker_count,
+            },
+        )
+    markdown = (source / "install.md").read_text(encoding="utf-8")
+    return template.replace(INSTALL_CONTENT_MARKER, _render_markdown(markdown))
 
 
 def build_snapshot(
@@ -90,20 +249,15 @@ def build_site(
             "Site output must not overwrite the source directory or repository root.",
             details={"output": str(output)},
         )
-    required = ("index.html", "styles.css", "app.js")
-    missing = [name for name in required if not (source / name).is_file()]
+    missing = [name for name in _SITE_SOURCE_FILES if not (source / name).is_file()]
     if missing:
         raise WudiTaskError(
             "site_source_missing",
             "Static site source is incomplete.",
             details={"missing": missing, "source": str(source)},
         )
-    generated_names = {
-        *required,
-        "snapshot.json",
-        ".nojekyll",
-        ".wuditask-site",
-    }
+    install_page = _render_install_page(source)
+    generated_names = {*_COPIED_SITE_ASSETS, *_GENERATED_SITE_FILES}
     if output.exists() and not output.is_dir():
         raise WudiTaskError(
             "site_output_not_directory",
@@ -121,8 +275,12 @@ def build_site(
             )
         shutil.rmtree(output)
     output.mkdir(parents=True)
-    for name in required:
+    for name in _COPIED_SITE_ASSETS:
         shutil.copy2(source / name, output / name)
+    (output / "install.html").write_text(
+        install_page,
+        encoding="utf-8",
+    )
     snapshot = build_snapshot(index, hub_repo=hub_repo)
     atomic_write_json(output / "snapshot.json", snapshot)
     (output / ".nojekyll").touch()
@@ -130,6 +288,6 @@ def build_site(
     return {
         "message": f"Built WudiTask dashboard at {output}.",
         "output": str(output),
-        "files": [*required, "snapshot.json", ".nojekyll", ".wuditask-site"],
+        "files": [*_COPIED_SITE_ASSETS, *_GENERATED_SITE_FILES],
         "counts": snapshot["counts"],
     }

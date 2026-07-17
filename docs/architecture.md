@@ -72,8 +72,10 @@ cache 中供后续命令复用。bare cache 首次初始化在同级 staging 目
 
 Pages 是派生视图，不是写入 API。Hub Actions checkout 一个固定的工具完整
 commit SHA，使用该版本的 validator 与 `site/` 从已提交 JSON 构建
-`snapshot.json`。`_site` 只作为 artifact 上传，不提交回 Task Hub。即使
-Pages 暂时不可用，CLI 与 Git 协议仍可运行。
+`snapshot.json`。同一 artifact 包含任务列表、由 Markdown 构建的安装说明和
+浏览器端依赖 DAG；DAG 只读取 snapshot，不产生第二份任务事实源。`_site` 只
+作为 artifact 上传，不提交回 Task Hub。即使 Pages 暂时不可用，CLI 与 Git
+协议仍可运行。
 
 ## Task Hub 普通 push 的乐观并发
 

@@ -1,0 +1,250 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="color-scheme" content="light">
+    <meta name="theme-color" content="#172126">
+    <title>Dependencies · WudiTask</title>
+    <link rel="stylesheet" href="styles.css">
+    <style>
+      .dag-workspace {
+        max-width: none;
+      }
+
+      .dag-toolbar {
+        display: flex;
+        align-items: end;
+        justify-content: space-between;
+        gap: 20px;
+        margin-bottom: 14px;
+      }
+
+      .dag-heading h2 {
+        margin: 0;
+        font-size: 20px;
+      }
+
+      .dag-heading p {
+        margin: 3px 0 0;
+        color: var(--muted);
+      }
+
+      .dag-controls {
+        display: flex;
+        align-items: end;
+        gap: 10px;
+      }
+
+      .dag-controls label {
+        display: grid;
+        gap: 4px;
+        color: var(--muted);
+        font-size: 12px;
+        font-weight: 650;
+      }
+
+      .dag-controls select {
+        min-width: min(280px, 52vw);
+        height: 36px;
+        padding: 6px 10px;
+        color: var(--ink);
+        background: var(--surface);
+        border: 1px solid var(--line-strong);
+        border-radius: 5px;
+      }
+
+      .dag-controls .button {
+        color: var(--ink);
+        background: var(--surface);
+        border-color: var(--line-strong);
+      }
+
+      .dag-controls select:focus-visible,
+      .dag-controls .button:focus-visible,
+      .dag-canvas:focus-visible {
+        border-color: var(--teal);
+        outline: 0;
+        box-shadow: 0 0 0 3px rgb(11 110 105 / 15%);
+      }
+
+      .dag-information {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 18px;
+        min-height: 40px;
+        margin-bottom: 10px;
+      }
+
+      .dag-summary {
+        color: var(--muted);
+        font-size: 12px;
+        white-space: nowrap;
+      }
+
+      .dag-legend {
+        min-width: 0;
+        display: flex;
+        justify-content: flex-end;
+        flex-wrap: wrap;
+        gap: 7px 14px;
+      }
+
+      .dag-legend-item {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        min-width: 0;
+        color: #354249;
+        font-size: 12px;
+      }
+
+      .dag-legend-swatch {
+        width: 11px;
+        height: 11px;
+        flex: 0 0 11px;
+        border-radius: 3px;
+      }
+
+      .dag-canvas {
+        min-height: 440px;
+        height: calc(100vh - 270px);
+        overflow: auto;
+        background-color: var(--surface);
+        background-image:
+          linear-gradient(#edf1ef 1px, transparent 1px),
+          linear-gradient(90deg, #edf1ef 1px, transparent 1px);
+        background-size: 24px 24px;
+        border: 1px solid var(--line);
+        border-radius: 6px;
+        box-shadow: var(--shadow);
+      }
+
+      .dag-canvas svg {
+        display: block;
+      }
+
+      .dag-empty-state,
+      .dag-error-state {
+        min-height: 220px;
+        display: grid;
+        place-content: center;
+        gap: 4px;
+        padding: 24px;
+        text-align: center;
+        background: var(--surface);
+        border: 1px solid var(--line);
+        border-radius: 6px;
+      }
+
+      .dag-empty-state[hidden],
+      .dag-error-state[hidden],
+      .dag-canvas[hidden] {
+        display: none;
+      }
+
+      .dag-empty-state span {
+        color: var(--muted);
+      }
+
+      .dag-error-state {
+        color: var(--red);
+        background: var(--red-soft);
+        border-color: #efb9b4;
+      }
+
+      @media (max-width: 760px) {
+        .dag-toolbar,
+        .dag-information {
+          align-items: stretch;
+          flex-direction: column;
+        }
+
+        .dag-controls {
+          align-items: stretch;
+        }
+
+        .dag-controls label {
+          flex: 1;
+        }
+
+        .dag-controls select {
+          width: 100%;
+          min-width: 0;
+        }
+
+        .dag-legend {
+          justify-content: flex-start;
+        }
+
+        .dag-canvas {
+          height: 62vh;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <header class="topbar">
+      <div class="brand">
+        <span class="brand-mark" aria-hidden="true">W</span>
+        <div>
+          <h1>WudiTask</h1>
+          <p>Distributed work queue</p>
+        </div>
+      </div>
+      <nav class="site-nav" aria-label="WudiTask pages">
+        <a href="index.html">Tasks</a>
+        <a class="is-active" href="dag.html" aria-current="page">Dependencies</a>
+        <a href="install.html">Install</a>
+      </nav>
+      <div class="sync-area">
+        <span id="sync-status" class="sync-status" aria-live="polite">Loading</span>
+        <a id="hub-link" class="hub-link" hidden rel="noreferrer">GitHub</a>
+      </div>
+    </header>
+
+    <main>
+      <section class="workspace dag-workspace" aria-labelledby="dag-title">
+        <div class="dag-toolbar">
+          <div class="dag-heading">
+            <h2 id="dag-title">Task dependencies</h2>
+            <p>Arrows run from each dependency to the task that depends on it.</p>
+          </div>
+          <div class="dag-controls">
+            <label for="dag-repo-filter">
+              Repository scope
+              <select id="dag-repo-filter">
+                <option value="">All repositories</option>
+              </select>
+            </label>
+            <button id="dag-refresh" class="button" type="button">Refresh</button>
+          </div>
+        </div>
+
+        <div class="dag-information">
+          <div id="dag-summary" class="dag-summary" aria-live="polite">No graph loaded</div>
+          <div id="dag-legend" class="dag-legend" aria-label="Repository colors"></div>
+        </div>
+
+        <div
+          id="dag-graph"
+          class="dag-canvas"
+          tabindex="0"
+          aria-label="Scrollable task dependency graph"
+        ></div>
+        <div id="dag-empty-state" class="dag-empty-state" hidden>
+          <strong>No tasks in this scope</strong>
+          <span>Choose another repository or add a task.</span>
+        </div>
+        <div id="dag-error-state" class="dag-error-state" role="alert" hidden></div>
+      </section>
+    </main>
+
+    <footer>
+      <span id="generated-at">Snapshot not loaded</span>
+      <span>Read-only GitHub Pages view</span>
+    </footer>
+    <script src="dag.js"></script>
+  </body>
+</html>

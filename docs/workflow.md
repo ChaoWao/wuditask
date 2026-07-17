@@ -352,6 +352,9 @@ fail closed；若 GitHub 已解除而 Hub push 未确认，lease 保持 locked/u
 - 分列查看 WudiTask queue state 与 GitHub delivery state；
 - 展开 canonical source、assignees、closing PR、claim、验收标准和依赖；
 - 检查归档 outcome 与 evidence。
+- 阅读从工具仓 `site/install.md` 构建的安装与使用说明；
+- 查看全部执行仓之间的任务依赖 DAG，或筛选一个仓的内部 DAG；全仓视图按仓
+  着色，节点显示 canonical Issue/PR 编号，text source 退回 task ID。
 
 Pages 不提供 Add/Execute/Archive 按钮，这是有意的：所有写操作必须经过身份、依赖、schema 与普通 push 协议。Hub workflow 固定工具版本以保证构建可复现；工具测试只在工具仓 CI 运行。
 

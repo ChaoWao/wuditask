@@ -480,6 +480,10 @@ class CliTests(unittest.TestCase):
 
             self.assertEqual(0, result.returncode, result.stderr)
             self.assertTrue((output / "index.html").is_file())
+            self.assertTrue((output / "install.html").is_file())
+            self.assertTrue((output / "install.md").is_file())
+            self.assertTrue((output / "dag.html").is_file())
+            self.assertTrue((output / "dag.js").is_file())
             self.assertFalse((hub / "site").exists())
 
     def test_remote_read_uses_configured_hub_and_branch(self) -> None:
@@ -701,7 +705,7 @@ class CliTests(unittest.TestCase):
         )
 
         self.assertEqual(0, result.returncode, result.stderr)
-        self.assertEqual("wuditask 0.5.0", result.stdout.strip())
+        self.assertEqual("wuditask 0.6.0", result.stdout.strip())
 
 
 if __name__ == "__main__":
