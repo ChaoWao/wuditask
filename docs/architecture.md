@@ -15,6 +15,9 @@ flowchart LR
   S --> P
   P --> G["Task Hub Git repository"]
   A --> W["Work repository"]
+  W --> D["GitHub Issue and pull request delivery"]
+  G --> I["Hub fallback Issues"]
+  P --> D
   G --> X["GitHub Actions"]
   X --> V["Validate and build snapshot"]
   V --> Q["Read-only GitHub Pages"]
@@ -23,11 +26,15 @@ flowchart LR
 
 ### Task Hub
 
-Task Hub 是任务状态的唯一事实源，只包含：
+Task Hub 是 coordination 状态的事实源；GitHub Issue/PR 是 delivery 状态的
+事实源。Hub Git tree 包含：
 
 - `hub.json`：严格的 task schema 与 tool API 版本契约。
 - `data/`：业务数据。
 - `.github/workflows/pages.yml`：用固定工具版本校验、构建与部署。
+
+Hub 的 GitHub Issues 是 canonical narrative 的 fallback tracker，属于服务端
+元数据，不进入 Git tree，也不会与 task-data push 竞争。
 
 工具仓保存 CLI、skills、schema、dashboard 源码和测试。安装配置 schema v2
 分别记录 `tool_path/tool_remote/tool_branch` 与
@@ -71,7 +78,7 @@ Pages 暂时不可用，CLI 与 Git 协议仍可运行。
 
 1. 在对应的持久 bare cache 中 fetch 配置的 `hub_remote/hub_branch`。
 2. 从 fetch 得到的精确 commit 创建唯一的 detached operation worktree。
-3. 在 worktree 中重新检查 schema、owner、claim 和依赖。
+3. 在 worktree 中重新检查 schema、claim 和依赖。
 4. 只修改目标任务文件，并用当前 human identity 创建 Git commit。
 5. 执行普通 `git push`，显式关闭 force、force-with-lease、mirror 与
    follow-tags，只推进配置的 Hub branch。
@@ -96,7 +103,7 @@ sequenceDiagram
   B->>O: ordinary push
   O-->>B: rejected, fetch first
   B->>O: fetch latest and create a new worktree
-  O-->>B: T already has owner
+  O-->>B: T already has claim
   B-->>B: return claim_conflict; do not work
 ```
 
@@ -151,11 +158,30 @@ archive 是同一事务中的 rename：`data/open/<id>.json` 变为 `data/archiv
 - GitHub 服务不可达时的离线领取。
 - 网络中断后立即知道 push 是否已被服务端接受。
 
+### GitHub delivery 与 Hub claim
+
+`execute` 在 Hub 中取得强唯一 lease，并以 canonical Issue/PR 的实时状态作为
+外部 guard。未指派 Issue 的流程是：读取 GitHub → 普通 push claim → 指派当前
+用户 → 再读 GitHub；已有 assignee 或 PR source 也必须在 push 后重读。指派失败
+或二次读取出现其他 owner 时，CLI 使用本次 claim token 补偿 release；无法确认
+GitHub cleanup 时保留 lease 并要求 reconcile。不存在跨仓原子提交。
+
+`release` 反向执行：对 Issue 先移除当前 assignee 并重读，再普通 push 清 lease；
+Hub push 未确认时保留 locked/unknown 状态并要求重试或 reconcile，避免猜测
+跨仓结果。当前用户仍拥有 active closing PR 时拒绝宣称任务已经回队列。local
+mode 从不执行这些 GitHub mutation。
+
+`archive done` 也实时读取 delivery：只有 canonical Issue 当前 completed（通常
+由 closing PR merge 触发），或 canonical PR merged，才进入 WudiTask 验收。
+Issue 一旦 open/reopened 就仍是 active，即使保留历史 merged closing PR。GitHub
+完成不自动产生 evidence，也不自动解除依赖。
+
 系统承诺：
 
 - 不 force-push Task Hub。
 - 未确认 claim 时 agent 不开工。
 - 每次远端重试都重新检查目标任务，而不是盲目重放旧文本。
+- human authorization 使用不可变 GitHub numeric ID；login 改名时刷新显示字段。
 - archive done 必须有完整验收证据。
 - failed/cancelled 不解除依赖。
 - 数据格式、依赖图与 Pages 构建在 CI 中统一验证。
@@ -185,6 +211,14 @@ fail-closed；改写远端历史不隐含 reset 本地安装的授权。
 
 ## 可用性与隐私
 
-Git origin 是协调面，短时不可用时所有新 claim fail closed；已经领取的工作可以继续，但 archive 要等远端恢复。
+Git origin 是协调面，GitHub API 是 delivery guard。任一短时不可用时新 claim
+fail closed；GitHub-backed done archive 也等待 delivery 恢复。已确认 lease 的
+本地实施可以继续。
 
-私有 Task Hub 可以用于限制 JSON 访问，但 Pages 的访问级别必须单独判断。一般私有源仓库发布的 Pages 仍是公网内容；只有支持 Pages 访问控制的 Enterprise Cloud 组织才应发布敏感任务。默认把 title、goal、context、owner 和 evidence 都视为会被 Pages 读者看到。
+私有 Task Hub 可以限制 JSON 访问，但 Pages 的访问级别必须单独判断。跨仓私有
+source 需要 Hub workflow 的只读 token；没有权限时 delivery 显示 unavailable。
+默认把 title、goal、context、claim identity、evidence、canonical source
+repo/URL、assignees、closing PR author/URL、review/check 摘要、delivery 时间和
+查询错误都视为可能被 Pages 读者看到。跨仓私有 token 至少需要 repository
+metadata、Issues、pull requests、checks 与 commit statuses 的只读权限；公开
+Pages 必须脱敏，敏感任务应使用真正受限的 Pages。

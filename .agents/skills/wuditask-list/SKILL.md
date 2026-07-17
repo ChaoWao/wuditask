@@ -21,6 +21,9 @@ python3 <tool_path>/tools/wuditask.py --json list --scope archive
 python3 <tool_path>/tools/wuditask.py --json list --scope all --repo owner/name
 ```
 
-Summarize only the fields relevant to the question. Preserve task IDs, repositories, ownership, priority, derived state, completion outcome, and canonical links exactly.
+Summarize only relevant fields. Keep WudiTask coordination state separate from
+live GitHub delivery state. Preserve task IDs, execution repositories, claim
+holders, priority, completion outcome, canonical source, and auxiliary links.
+Treat `delivery.status=unavailable` as unknown, never as unassigned.
 
 Do not use a mutating command for listing. Use `$wuditask-show` or `/wuditask-show` when the user asks for one task's full details, and `$wuditask-dep-check` or `/wuditask-dep-check` for blocker analysis.

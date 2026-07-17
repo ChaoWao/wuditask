@@ -38,7 +38,13 @@ If `launcher_on_path` is false, mention the launcher path; agents can still call
 
 If installation returns `install_path_exists`, inspect and tell the user which destination conflicts. Do not use `--replace` until the user explicitly approves. When approved, rerun with `--replace`; the installer renames existing content to a timestamped backup.
 
-The installer initializes or refreshes the persistent bare Hub cache and validates an isolated operation worktree before changing links or config. A validation failure may leave reusable Git objects in this disposable cache, but it must not create config, skill links, or the launcher. After a successful install, run a remote validation once more through the registered CLI:
+The installer initializes or refreshes the persistent bare Hub cache and
+validates an isolated operation worktree before changing links or config. It
+registers the complete ten-skill suite, including the read-only GitHub/WudiTask
+reconciliation workflow. A validation failure may leave reusable Git objects
+in this disposable cache, but it must not create config, skill links, or the
+launcher. After a successful install, run a remote validation once more through
+the registered CLI:
 
 ```bash
 python3 TOOL/tools/wuditask.py --json validate

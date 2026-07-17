@@ -79,7 +79,7 @@ class HubContractTests(unittest.TestCase):
             repository.initialize()
 
         self.assertEqual(
-            first, '{\n  "schema_version": 1,\n  "tool_api_version": 1\n}\n'
+            first, '{\n  "schema_version": 2,\n  "tool_api_version": 2\n}\n'
         )
 
     def test_symlinked_data_path_is_rejected_before_writing(self) -> None:

@@ -18,7 +18,63 @@ TOOL = ROOT / "tools" / "wuditask.py"
 
 
 class CliTests(unittest.TestCase):
-    def run_cli(self, hub: Path, *arguments: str) -> subprocess.CompletedProcess[str]:
+    @staticmethod
+    def fake_github(
+        base: Path, *, assignees: list[str] | None = None
+    ) -> tuple[dict[str, str], Path, Path]:
+        fake_bin = base / "fake-bin"
+        fake_bin.mkdir()
+        state = base / "github-state.json"
+        log = base / "github-calls.log"
+        atomic_write_json(state, {"assignees": assignees or []})
+        fake_gh = fake_bin / "gh"
+        fake_gh.write_text(
+            "#!/usr/bin/env python3\n"
+            "import json, os, pathlib, sys\n"
+            "args = sys.argv[1:]\n"
+            "state_path = pathlib.Path(os.environ['FAKE_GH_STATE'])\n"
+            "log_path = pathlib.Path(os.environ['FAKE_GH_LOG'])\n"
+            "state = json.loads(state_path.read_text())\n"
+            "if args[:2] == ['api', 'user']:\n"
+            "    print(json.dumps({'login': 'alice', 'id': 1001}))\n"
+            "elif args[:2] == ['issue', 'view']:\n"
+            "    if os.environ.get('FAKE_GH_FAIL_VIEW') == '1':\n"
+            "        print('not found', file=sys.stderr)\n"
+            "        raise SystemExit(1)\n"
+            "    print(json.dumps({'state': 'OPEN', 'stateReason': None, "
+            "'url': 'https://github.com/acme/service/issues/42', "
+            "'assignees': [{'login': x} for x in state['assignees']], "
+            "'closedByPullRequestsReferences': [], "
+            "'updatedAt': '2026-07-16T10:00:00Z'}))\n"
+            "elif args[:2] == ['issue', 'edit']:\n"
+            "    if '--add-assignee' in args:\n"
+            "        login = args[args.index('--add-assignee') + 1]\n"
+            "        if login not in state['assignees']: state['assignees'].append(login)\n"
+            "    elif '--remove-assignee' in args:\n"
+            "        login = args[args.index('--remove-assignee') + 1]\n"
+            "        state['assignees'] = [x for x in state['assignees'] if x != login]\n"
+            "    state_path.write_text(json.dumps(state))\n"
+            "    with log_path.open('a') as handle: handle.write(' '.join(args) + '\\n')\n"
+            "else:\n"
+            "    print('unsupported fake gh command', file=sys.stderr)\n"
+            "    raise SystemExit(1)\n",
+            encoding="utf-8",
+        )
+        fake_gh.chmod(0o755)
+        environment = {
+            **os.environ,
+            "PATH": f"{fake_bin}{os.pathsep}{os.environ['PATH']}",
+            "FAKE_GH_STATE": str(state),
+            "FAKE_GH_LOG": str(log),
+        }
+        return environment, state, log
+
+    def run_cli(
+        self,
+        hub: Path,
+        *arguments: str,
+        environment: dict[str, str] | None = None,
+    ) -> subprocess.CompletedProcess[str]:
         return subprocess.run(
             [
                 sys.executable,
@@ -32,6 +88,7 @@ class CliTests(unittest.TestCase):
                 *arguments,
             ],
             cwd=ROOT,
+            env=environment,
             check=False,
             capture_output=True,
             text=True,
@@ -48,6 +105,8 @@ class CliTests(unittest.TestCase):
                 "WDT-20260711T120000Z-A1B2C3",
                 "--repo",
                 "acme/service",
+                "--text-source-reason",
+                "CLI lifecycle fixture has no external narrative.",
                 "--title",
                 "CLI task",
                 "--goal",
@@ -83,6 +142,264 @@ class CliTests(unittest.TestCase):
             )
             self.assertEqual(0, archived.returncode, archived.stderr)
             self.assertTrue(json.loads(archived.stdout)["confirmed"])
+
+    def test_add_parses_hub_fallback_source_separately_from_execution_repo(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            hub = Path(temporary)
+            TaskRepository(hub).initialize()
+            git(["init", "-b", "main"], hub)
+            git(
+                [
+                    "remote",
+                    "add",
+                    "origin",
+                    "https://github.com/acme/wuditask-hub.git",
+                ],
+                hub,
+            )
+            environment, _, _ = self.fake_github(hub)
+            added = self.run_cli(
+                hub,
+                "add",
+                "--id",
+                "WDT-20260711T120000Z-A1B2C3",
+                "--repo",
+                "acme/service",
+                "--source",
+                "https://github.com/acme/wuditask-hub/issues/42",
+                "--source-fallback-reason",
+                "The execution repository has Issues disabled.",
+                "--title",
+                "Fallback task",
+                "--goal",
+                "Exercise structured fallback source parsing.",
+                "--accept",
+                "The task is recorded.",
+                environment=environment,
+            )
+
+        self.assertEqual(0, added.returncode, added.stdout)
+        source = json.loads(added.stdout)["task"]["source"]
+        self.assertEqual(
+            {
+                "kind": "github_issue_fallback",
+                "repo": "acme/wuditask-hub",
+                "number": 42,
+                "fallback_reason": "The execution repository has Issues disabled.",
+            },
+            source,
+        )
+
+    def test_malformed_source_spec_returns_structured_json_error(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            hub = Path(temporary)
+            TaskRepository(hub).initialize()
+            spec_path = hub / "malformed.json"
+            atomic_write_json(
+                spec_path,
+                {
+                    "title": "Malformed source",
+                    "repo": "acme/service",
+                    "source": {"kind": "github_issue", "number": 42},
+                    "goal": "Return a structured validation error.",
+                    "acceptance_criteria": ["The error is structured."],
+                },
+            )
+            result = self.run_cli(hub, "add", "--spec", str(spec_path))
+
+        self.assertEqual(2, result.returncode, result.stderr)
+        self.assertEqual(
+            "invalid_task_data", json.loads(result.stdout)["error"]["code"]
+        )
+        self.assertNotIn("Traceback", result.stderr)
+
+    def test_add_rejects_wrong_or_unreadable_github_source(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            hub = Path(temporary)
+            TaskRepository(hub).initialize()
+            git(["init", "-b", "main"], hub)
+            git(
+                [
+                    "remote",
+                    "add",
+                    "origin",
+                    "https://github.com/acme/wuditask-hub.git",
+                ],
+                hub,
+            )
+            environment, _, _ = self.fake_github(hub)
+            common = (
+                "--id",
+                "WDT-20260711T120000Z-A1B2C3",
+                "--repo",
+                "acme/service",
+                "--title",
+                "Canonical source validation",
+                "--goal",
+                "Reject invalid canonical sources.",
+                "--accept",
+                "The invalid source is rejected.",
+            )
+            wrong_hub = self.run_cli(
+                hub,
+                "add",
+                *common,
+                "--source",
+                "https://github.com/acme/other-hub/issues/42",
+                "--source-fallback-reason",
+                "The execution repository cannot host Issues.",
+                environment=environment,
+            )
+            unavailable_environment = {**environment, "FAKE_GH_FAIL_VIEW": "1"}
+            unavailable = self.run_cli(
+                hub,
+                "add",
+                *common,
+                "--source",
+                "https://github.com/acme/service/issues/404",
+                environment=unavailable_environment,
+            )
+
+        self.assertEqual(
+            "invalid_fallback_repository",
+            json.loads(wrong_hub.stdout)["error"]["code"],
+        )
+        self.assertEqual(
+            "github_source_unavailable",
+            json.loads(unavailable.stdout)["error"]["code"],
+        )
+
+    def test_local_execute_never_mutates_real_github_assignment(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            hub = Path(temporary)
+            repository = TaskRepository(hub)
+            repository.initialize()
+            task = add_task(
+                repository,
+                "WDT-20260711T120000Z-A1B2C3",
+            )
+            task["source"] = {
+                "kind": "github_issue",
+                "repo": "acme/service",
+                "number": 42,
+            }
+            atomic_write_json(
+                repository.open_dir / "WDT-20260711T120000Z-A1B2C3.json", task
+            )
+            environment, _, log = self.fake_github(hub)
+            result = self.run_cli(
+                hub,
+                "execute",
+                "WDT-20260711T120000Z-A1B2C3",
+                "--repo",
+                "acme/service",
+                environment=environment,
+            )
+
+            self.assertEqual(3, result.returncode, result.stdout)
+            self.assertEqual(
+                "github_claim_reconciliation_failed",
+                json.loads(result.stdout)["error"]["code"],
+            )
+            self.assertFalse(log.exists())
+            self.assertIsNone(
+                repository.load_index()
+                .open["WDT-20260711T120000Z-A1B2C3"]
+                .task["claim"]
+            )
+
+    def test_remote_execute_and_release_sync_github_assignment(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            base = Path(temporary)
+            home = base / "home"
+            home.mkdir()
+            hub = make_hub_origin(base)
+            seed = base / "hub-seed"
+            repository = TaskRepository(seed)
+            task = add_task(
+                repository,
+                "WDT-20260711T120000Z-A1B2C3",
+            )
+            task["source"] = {
+                "kind": "github_issue",
+                "repo": "acme/service",
+                "number": 42,
+            }
+            atomic_write_json(
+                repository.open_dir / "WDT-20260711T120000Z-A1B2C3.json", task
+            )
+            git(["add", "data"], seed)
+            git(["commit", "-m", "add GitHub-backed task"], seed)
+            git(["push", "origin", "main"], seed)
+            environment, state, log = self.fake_github(base)
+            atomic_write_json(
+                home / ".wuditask" / "config.json",
+                {
+                    "schema_version": 2,
+                    "tool_path": str(ROOT),
+                    "tool_remote": git(
+                        ["remote", "get-url", "origin"], ROOT
+                    ).stdout.strip(),
+                    "tool_branch": git(
+                        ["branch", "--show-current"], ROOT
+                    ).stdout.strip(),
+                    "hub_remote": str(hub),
+                    "hub_branch": "main",
+                    "installed_at": "2026-07-11T12:00:00Z",
+                },
+            )
+            environment["HOME"] = str(home)
+
+            claimed = subprocess.run(
+                [
+                    sys.executable,
+                    str(TOOL),
+                    "--json",
+                    "execute",
+                    "WDT-20260711T120000Z-A1B2C3",
+                    "--repo",
+                    "acme/service",
+                ],
+                cwd=ROOT,
+                env=environment,
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+            released = subprocess.run(
+                [
+                    sys.executable,
+                    str(TOOL),
+                    "--json",
+                    "release",
+                    "WDT-20260711T120000Z-A1B2C3",
+                    "--reason",
+                    "Return to the shared queue.",
+                ],
+                cwd=ROOT,
+                env=environment,
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+
+            self.assertEqual(0, claimed.returncode, claimed.stdout)
+            self.assertTrue(json.loads(claimed.stdout)["work_authorized"])
+            self.assertEqual(0, released.returncode, released.stdout)
+            self.assertTrue(json.loads(released.stdout)["confirmed"])
+            self.assertEqual([], json.loads(state.read_text())["assignees"])
+            calls = log.read_text(encoding="utf-8")
+            self.assertIn("--add-assignee alice", calls)
+            self.assertIn("--remove-assignee alice", calls)
+            git(["pull", "--ff-only"], seed)
+            self.assertIsNone(
+                TaskRepository(seed)
+                .load_index()
+                .open["WDT-20260711T120000Z-A1B2C3"]
+                .task["claim"]
+            )
 
     def test_local_hub_path_is_explicit_and_local_only(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -311,7 +628,7 @@ class CliTests(unittest.TestCase):
         self.assertEqual(
             "$wuditask-add", add_payload["commands"][0]["agent_usage"]["codex"]
         )
-        self.assertIn("--link ISSUE_OR_PR_URL", add_payload["commands"][0]["usage"])
+        self.assertIn("--source ISSUE_OR_PR_URL", add_payload["commands"][0]["usage"])
 
     def test_help_routes_every_operation_to_a_dedicated_skill(self) -> None:
         routes = {
@@ -322,6 +639,7 @@ class CliTests(unittest.TestCase):
             "release": ("codex", "$wuditask-release"),
             "list": ("codex", "$wuditask-list"),
             "show": ("codex", "$wuditask-show"),
+            "reconcile": ("codex", "$wuditask-reconcile"),
             "install": ("codex", "$wuditask-install"),
             "selfupdate": ("codex", "$wuditask-selfupdate"),
         }
@@ -362,7 +680,7 @@ class CliTests(unittest.TestCase):
         )
 
         self.assertEqual(0, result.returncode, result.stderr)
-        self.assertEqual("wuditask 0.3.0", result.stdout.strip())
+        self.assertEqual("wuditask 0.4.0", result.stdout.strip())
 
 
 if __name__ == "__main__":

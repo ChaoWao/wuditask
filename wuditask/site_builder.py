@@ -1,16 +1,26 @@
 from __future__ import annotations
 
 import shutil
+from collections.abc import Callable, Mapping
 from pathlib import Path
 from typing import Any
 
 from .dependencies import dependency_report, task_dependency_report
 from .errors import WudiTaskError
+from .github_delivery import fetch_delivery
 from .repository import TaskIndex
 from .util import atomic_write_json, utc_now
 
 
-def build_snapshot(index: TaskIndex, *, hub_repo: str | None = None) -> dict[str, Any]:
+DeliveryFetcher = Callable[[Mapping[str, Any]], dict[str, Any]]
+
+
+def build_snapshot(
+    index: TaskIndex,
+    *,
+    hub_repo: str | None = None,
+    delivery_fetcher: DeliveryFetcher = fetch_delivery,
+) -> dict[str, Any]:
     open_report = dependency_report(index)
     report_by_id = {task["id"]: task for task in open_report["tasks"]}
     open_tasks = []
@@ -27,12 +37,14 @@ def build_snapshot(index: TaskIndex, *, hub_repo: str | None = None) -> dict[str
             {
                 **task,
                 "derived": report_by_id[task["id"]],
+                "delivery": delivery_fetcher(task["source"]),
             }
         )
     archived_tasks = [
         {
             **record.task,
             "derived": task_dependency_report(record, index),
+            "delivery": delivery_fetcher(record.task["source"]),
         }
         for record in sorted(
             index.archived.values(),
@@ -49,7 +61,7 @@ def build_snapshot(index: TaskIndex, *, hub_repo: str | None = None) -> dict[str
         outcomes[outcome] = outcomes.get(outcome, 0) + 1
     repos = sorted({task["repo"] for task in open_tasks + archived_tasks})
     return {
-        "schema_version": 1,
+        "schema_version": 2,
         "generated_at": utc_now(),
         "hub_repo": hub_repo,
         "counts": {

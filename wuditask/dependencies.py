@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Any
 
 from .errors import WudiTaskError
+from .model import claim_identity
 from .repository import TaskIndex, TaskRecord
 
 
@@ -98,7 +99,7 @@ def _expanded_dependency(dependency_id: str, index: TaskIndex) -> dict[str, Any]
         "acceptance_criteria": task["acceptance_criteria"],
         "outcome": outcome,
         "acceptance_results": acceptance_results,
-        "owner": task.get("owner"),
+        "claim_holder": claim_identity(task.get("claim")),
     }
 
 
@@ -140,7 +141,7 @@ def task_dependency_report(record: TaskRecord, index: TaskIndex) -> dict[str, An
         "title": task["title"],
         "goal": task["goal"],
         "priority": task["priority"],
-        "owner": task.get("owner"),
+        "claim_holder": claim_identity(task.get("claim")),
         "created_at": task["created_at"],
         "ready": ready,
         "state": state,

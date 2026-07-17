@@ -52,6 +52,11 @@ class SiteTests(unittest.TestCase):
             self.assertEqual(1, result["counts"]["in_progress"])
             self.assertEqual("acme/wuditask", snapshot["hub_repo"])
             self.assertEqual(task_id, snapshot["open_tasks"][0]["id"])
+            self.assertEqual(
+                "text_only",
+                snapshot["open_tasks"][0]["delivery"]["delivery_state"],
+            )
+            self.assertNotIn("owner", snapshot["open_tasks"][0])
             self.assertTrue((output / "index.html").is_file())
             self.assertTrue((output / "styles.css").is_file())
             self.assertTrue((output / "app.js").is_file())

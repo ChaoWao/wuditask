@@ -33,11 +33,11 @@
           </div>
           <div class="metric metric-ready">
             <span id="count-ready" class="metric-value">0</span>
-            <span class="metric-label">Ready</span>
+            <span class="metric-label">Queue ready</span>
           </div>
           <div class="metric metric-progress">
             <span id="count-progress" class="metric-value">0</span>
-            <span class="metric-label">In progress</span>
+            <span class="metric-label">Claimed</span>
           </div>
           <div class="metric metric-blocked">
             <span id="count-blocked" class="metric-value">0</span>
@@ -80,6 +80,12 @@
                 <option value="blocked">Blocked</option>
               </select>
             </label>
+            <label>
+              <span class="visually-hidden">Delivery state</span>
+              <select id="delivery-filter" aria-label="Delivery state">
+                <option value="">All delivery states</option>
+              </select>
+            </label>
           </div>
         </div>
 
@@ -87,8 +93,9 @@
           <span>Priority</span>
           <span>Task</span>
           <span>Repository</span>
-          <span>Owner</span>
-          <span>State</span>
+          <span>Claim</span>
+          <span>Queue</span>
+          <span>Delivery</span>
         </div>
         <div id="task-list" class="task-list" aria-live="polite"></div>
         <div id="empty-state" class="empty-state" hidden>

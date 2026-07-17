@@ -21,6 +21,10 @@ def spec(
     return {
         "title": title,
         "repo": repo,
+        "source": {
+            "kind": "text",
+            "reason": "Synthetic task used by the WudiTask test suite.",
+        },
         "goal": f"Complete {title.lower()} with observable behavior.",
         "context": ["Keep the public API stable."],
         "acceptance_criteria": [

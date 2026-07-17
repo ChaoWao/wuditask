@@ -64,11 +64,18 @@ function openTask(repo, state) {
     repo: repo,
     goal: "Exercise open filters.",
     priority: "P1",
-    owner: null,
+    source: { kind: "text", reason: "test" },
+    claim: null,
     context: [],
     acceptance_criteria: [],
     links: [],
-    derived: { state: state, dependencies: [] }
+    derived: { state: state, claim_holder: null, dependencies: [] },
+    delivery: {
+      status: "fresh",
+      delivery_state: "text_only",
+      assignees: [],
+      prs: []
+    }
   };
 }
 
@@ -79,11 +86,18 @@ function archivedTask(repo, outcome) {
     repo: repo,
     goal: "Exercise archive filters.",
     priority: "P2",
-    owner: null,
+    source: { kind: "text", reason: "test" },
+    claim: null,
     context: [],
     acceptance_criteria: [],
     links: [],
-    derived: { state: outcome, dependencies: [] },
+    derived: { state: outcome, claim_holder: null, dependencies: [] },
+    delivery: {
+      status: "fresh",
+      delivery_state: "text_only",
+      assignees: [],
+      prs: []
+    },
     completion: {
       outcome: outcome,
       result: "Complete.",
@@ -133,6 +147,7 @@ async function main() {
     "search",
     "repo-filter",
     "state-filter",
+    "delivery-filter",
     "refresh",
     "count-open",
     "count-ready",
@@ -202,10 +217,12 @@ async function main() {
 
   assert.deepEqual(optionValues(elements["repo-filter"]), ["", "open/repo"]);
   assert.deepEqual(optionValues(elements["state-filter"]), ["", "ready"]);
+  assert.deepEqual(optionValues(elements["delivery-filter"]), ["", "text_only"]);
 
   archiveButton.listeners.click();
   assert.deepEqual(optionValues(elements["repo-filter"]), ["", "archive/repo"]);
   assert.deepEqual(optionValues(elements["state-filter"]), ["", "done"]);
+  assert.deepEqual(optionValues(elements["delivery-filter"]), ["", "text_only"]);
 
   openButton.listeners.click();
   elements["repo-filter"].value = "open/repo";

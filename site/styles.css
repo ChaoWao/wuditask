@@ -279,7 +279,7 @@ a {
 .list-heading,
 .task-summary {
   display: grid;
-  grid-template-columns: 74px minmax(260px, 2.4fr) minmax(150px, 1fr) minmax(130px, 0.8fr) 110px;
+  grid-template-columns: 64px minmax(230px, 2.2fr) minmax(140px, 1fr) minmax(120px, 0.8fr) 105px 130px;
   gap: 16px;
   align-items: center;
 }
@@ -424,20 +424,36 @@ a {
   background: var(--green-soft);
 }
 
-.state-in_progress {
+.state-in_progress,
+.state-assigned,
+.state-implementing,
+.state-review {
   color: var(--blue);
   background: var(--blue-soft);
 }
 
-.state-blocked {
+.state-blocked,
+.state-verification_needed {
   color: var(--amber);
   background: var(--amber-soft);
 }
 
 .state-failed,
-.state-cancelled {
+.state-cancelled,
+.state-unavailable {
   color: var(--red);
   background: var(--red-soft);
+}
+
+.state-ready_to_merge {
+  color: var(--green);
+  background: var(--green-soft);
+}
+
+.state-unstarted,
+.state-text_only {
+  color: var(--muted);
+  background: #eef2f0;
 }
 
 .task-detail {
@@ -531,6 +547,12 @@ a {
   font-size: 12px;
 }
 
+.delivery-pr {
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid var(--line);
+}
+
 .links {
   display: flex;
   flex-wrap: wrap;
@@ -617,7 +639,7 @@ footer {
   }
 
   .task-summary {
-    grid-template-columns: 56px minmax(0, 1fr) 100px;
+    grid-template-columns: 56px minmax(0, 1fr) 100px 120px;
     gap: 10px;
   }
 
@@ -688,7 +710,7 @@ footer {
   }
 
   .task-summary {
-    grid-template-columns: 44px minmax(0, 1fr) 86px;
+    grid-template-columns: 44px minmax(0, 1fr) 80px 96px;
     gap: 8px;
   }
 

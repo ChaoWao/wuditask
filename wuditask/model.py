@@ -7,12 +7,17 @@ from typing import Any
 from .errors import DataValidationError
 from .util import REPO_RE, TASK_ID_RE, is_utc_timestamp
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 PRIORITIES = {"P0", "P1", "P2", "P3"}
 VERIFICATION_TYPES = {"command", "file", "manual", "url"}
 OUTCOMES = {"done", "failed", "cancelled"}
 RESULT_STATUSES = {"passed", "failed", "skipped"}
 CRITERION_ID_RE = re.compile(r"^AC-[1-9][0-9]*$")
+GITHUB_SOURCE_KINDS = {
+    "github_issue",
+    "github_pull_request",
+    "github_issue_fallback",
+}
 
 
 @dataclass(frozen=True)
@@ -69,8 +74,8 @@ def validate_task(
         "id",
         "title",
         "repo",
+        "source",
         "created_by",
-        "owner",
         "priority",
         "created_at",
         "goal",
@@ -95,6 +100,7 @@ def validate_task(
     repo = task.get("repo")
     if not isinstance(repo, str) or not REPO_RE.fullmatch(repo):
         _issue(issues, "$.repo", "must use owner/name form")
+    _validate_source(task.get("source"), repo, issues)
     _check_identity(task.get("created_by"), "$.created_by", issues)
     if task.get("priority") not in PRIORITIES:
         _issue(issues, "$.priority", "must be one of P0, P1, P2, P3")
@@ -170,15 +176,8 @@ def validate_task(
         for index, link in enumerate(links):
             _check_string(link, f"$.links[{index}]", issues)
 
-    owner = task.get("owner")
     claim = task.get("claim")
-    if owner is not None:
-        _check_identity(owner, "$.owner", issues)
-    if owner is None and claim is not None:
-        _issue(issues, "$.claim", "must be null when owner is null")
-    elif owner is not None and claim is None:
-        _issue(issues, "$.claim", "must be present when owner is present")
-    elif owner is not None:
+    if claim is not None:
         if not isinstance(claim, dict):
             _issue(issues, "$.claim", "must be an object")
         else:
@@ -196,11 +195,6 @@ def validate_task(
                 _issue(issues, "$.claim.github_id", "must be a positive integer")
             if not is_utc_timestamp(claim.get("claimed_at")):
                 _issue(issues, "$.claim.claimed_at", "must be a UTC timestamp")
-            if isinstance(owner, dict):
-                if claim.get("github_login") != owner.get("login"):
-                    _issue(issues, "$.claim.github_login", "must match owner.login")
-                if claim.get("github_id") != owner.get("github_id"):
-                    _issue(issues, "$.claim.github_id", "must match owner.github_id")
 
     completion = task.get("completion")
     if archived is False and "completion" in task:
@@ -277,6 +271,74 @@ def _validate_completion(
                 )
 
 
+def _validate_source(
+    source: object,
+    execution_repo: object,
+    issues: list[dict[str, str]],
+) -> None:
+    path = "$.source"
+    if not isinstance(source, dict):
+        _issue(issues, path, "must be an object")
+        return
+    kind = source.get("kind")
+    if kind == "text":
+        if set(source) != {"kind", "reason"}:
+            _issue(issues, path, "text source must contain only kind and reason")
+        _check_string(source.get("reason"), f"{path}.reason", issues)
+        return
+    if kind not in GITHUB_SOURCE_KINDS:
+        _issue(
+            issues,
+            f"{path}.kind",
+            "must be github_issue, github_pull_request, github_issue_fallback, or text",
+        )
+        return
+    fallback = kind == "github_issue_fallback"
+    allowed = (
+        {"kind", "repo", "number", "fallback_reason"}
+        if fallback
+        else {"kind", "repo", "number"}
+    )
+    required = {"kind", "repo", "number"}
+    if fallback:
+        required.add("fallback_reason")
+    if not required.issubset(source) or not set(source).issubset(allowed):
+        _issue(
+            issues,
+            path,
+            (
+                "fallback Issue source must contain only kind, repo, number, and fallback_reason"
+                if fallback
+                else "GitHub source must contain only kind, repo, and number"
+            ),
+        )
+    source_repo = source.get("repo")
+    if not isinstance(source_repo, str) or not REPO_RE.fullmatch(source_repo):
+        _issue(issues, f"{path}.repo", "must use owner/name form")
+    number = source.get("number")
+    if not isinstance(number, int) or isinstance(number, bool) or number <= 0:
+        _issue(issues, f"{path}.number", "must be a positive integer")
+    same_repo = (
+        isinstance(source_repo, str)
+        and isinstance(execution_repo, str)
+        and source_repo.casefold() == execution_repo.casefold()
+    )
+    if fallback and same_repo:
+        _issue(
+            issues,
+            f"{path}.repo",
+            "fallback Issue must be outside the execution repository",
+        )
+    if fallback:
+        _check_string(source.get("fallback_reason"), f"{path}.fallback_reason", issues)
+    elif not same_repo:
+        _issue(
+            issues,
+            f"{path}.repo",
+            "regular GitHub source must be in the execution repository; use github_issue_fallback for the configured Hub",
+        )
+
+
 def require_valid_task(task: object, *, archived: bool | None = None) -> None:
     issues = validate_task(task, archived=archived)
     if issues:
@@ -284,7 +346,18 @@ def require_valid_task(task: object, *, archived: bool | None = None) -> None:
 
 
 def identity_matches(value: object, identity: Identity) -> bool:
-    return isinstance(value, dict) and (
-        value.get("login") == identity.login
-        and value.get("github_id") == identity.github_id
-    )
+    return isinstance(value, dict) and value.get("github_id") == identity.github_id
+
+
+def claim_matches_identity(value: object, identity: Identity) -> bool:
+    return isinstance(value, dict) and value.get("github_id") == identity.github_id
+
+
+def claim_identity(value: object) -> dict[str, Any] | None:
+    if not isinstance(value, dict):
+        return None
+    login = value.get("github_login")
+    github_id = value.get("github_id")
+    if not isinstance(login, str) or not isinstance(github_id, int):
+        return None
+    return {"login": login, "github_id": github_id}

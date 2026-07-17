@@ -14,6 +14,7 @@ EXPECTED_SKILLS = {
     "wuditask-execute",
     "wuditask-install",
     "wuditask-list",
+    "wuditask-reconcile",
     "wuditask-release",
     "wuditask-selfupdate",
     "wuditask-show",
@@ -77,13 +78,13 @@ class SkillTests(unittest.TestCase):
 
     def test_add_and_selfupdate_policy_invariants(self) -> None:
         add = (SKILLS_ROOT / "wuditask-add" / "SKILL.md").read_text(encoding="utf-8")
-        self.assertIn("canonical Issue or PR URL", add)
-        self.assertIn("Do not create an Issue in the WudiTask hub", add)
+        self.assertIn("canonical source", add)
+        self.assertIn("fallback Issue in the configured Hub repository", add)
         self.assertLess(
             add.index("## Build the execution contract"),
-            add.index("## Establish the canonical description"),
+            add.index("## Establish the canonical source"),
         )
-        self.assertIn("do not silently fall back to text", add)
+        self.assertIn("transient authentication or network error", add)
 
         selfupdate = (SKILLS_ROOT / "wuditask-selfupdate" / "SKILL.md").read_text(
             encoding="utf-8"

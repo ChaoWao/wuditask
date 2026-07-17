@@ -21,6 +21,7 @@ EXPECTED_SKILLS = {
     "wuditask-execute",
     "wuditask-install",
     "wuditask-list",
+    "wuditask-reconcile",
     "wuditask-release",
     "wuditask-selfupdate",
     "wuditask-show",
@@ -108,7 +109,7 @@ class InstallTests(unittest.TestCase):
                         installed.resolve(),
                     )
                 self.assertIn(
-                    "Prefer an existing GitHub Issue or PR",
+                    "fallback Issue in the configured Hub repository",
                     (base / "wuditask-add" / "SKILL.md").read_text(),
                 )
                 self.assertIn(

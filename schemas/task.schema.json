@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "urn:wuditask:schema:task:v1",
+  "$id": "urn:wuditask:schema:task:v2",
   "title": "WudiTask task",
   "type": "object",
   "additionalProperties": false,
@@ -9,8 +9,8 @@
     "id",
     "title",
     "repo",
+    "source",
     "created_by",
-    "owner",
     "priority",
     "created_at",
     "goal",
@@ -22,7 +22,7 @@
   ],
   "properties": {
     "schema_version": {
-      "const": 1
+      "const": 2
     },
     "id": {
       "type": "string",
@@ -36,18 +36,24 @@
       "type": "string",
       "pattern": "^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$"
     },
-    "created_by": {
-      "$ref": "#/$defs/identity"
-    },
-    "owner": {
+    "source": {
       "oneOf": [
         {
-          "type": "null"
+          "$ref": "#/$defs/githubIssueSource"
         },
         {
-          "$ref": "#/$defs/identity"
+          "$ref": "#/$defs/githubPullRequestSource"
+        },
+        {
+          "$ref": "#/$defs/githubFallbackIssueSource"
+        },
+        {
+          "$ref": "#/$defs/textSource"
         }
       ]
+    },
+    "created_by": {
+      "$ref": "#/$defs/identity"
     },
     "priority": {
       "enum": ["P0", "P1", "P2", "P3"]
@@ -104,32 +110,79 @@
       "$ref": "#/$defs/completion"
     }
   },
-  "allOf": [
-    {
-      "if": {
-        "properties": {
-          "owner": {
-            "type": "null"
-          }
-        }
-      },
-      "then": {
-        "properties": {
-          "claim": {
-            "type": "null"
-          }
-        }
-      },
-      "else": {
-        "properties": {
-          "claim": {
-            "$ref": "#/$defs/claim"
-          }
+  "$defs": {
+    "githubIssueSource": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "repo", "number"],
+      "properties": {
+        "kind": {
+          "const": "github_issue"
+        },
+        "repo": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$"
+        },
+        "number": {
+          "type": "integer",
+          "minimum": 1
         }
       }
-    }
-  ],
-  "$defs": {
+    },
+    "githubPullRequestSource": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "repo", "number"],
+      "properties": {
+        "kind": {
+          "const": "github_pull_request"
+        },
+        "repo": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$"
+        },
+        "number": {
+          "type": "integer",
+          "minimum": 1
+        }
+      }
+    },
+    "githubFallbackIssueSource": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "repo", "number", "fallback_reason"],
+      "properties": {
+        "kind": {
+          "const": "github_issue_fallback"
+        },
+        "repo": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$"
+        },
+        "number": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "fallback_reason": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "textSource": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "reason"],
+      "properties": {
+        "kind": {
+          "const": "text"
+        },
+        "reason": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
     "identity": {
       "type": "object",
       "additionalProperties": false,

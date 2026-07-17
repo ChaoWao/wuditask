@@ -151,8 +151,8 @@ class GitConcurrencyTests(unittest.TestCase):
             max(result["sync"]["attempts"] for result in results), 2
         )
         index = self._remote_index()
-        self.assertEqual("alice", index.open[FIRST_ID].task["owner"]["login"])
-        self.assertEqual("bob", index.open[SECOND_ID].task["owner"]["login"])
+        self.assertEqual("alice", index.open[FIRST_ID].task["claim"]["github_login"])
+        self.assertEqual("bob", index.open[SECOND_ID].task["claim"]["github_login"])
         authors = git(
             ["log", "-2", "--format=%an", "refs/heads/main"],
             self.origin,
@@ -167,8 +167,8 @@ class GitConcurrencyTests(unittest.TestCase):
         self.assertIsInstance(errors[0], WudiTaskError)
         self.assertEqual("claim_conflict", errors[0].code)
         index = self._remote_index()
-        owner = index.open[FIRST_ID].task["owner"]["login"]
-        self.assertIn(owner, {"alice", "bob"})
+        claim_holder = index.open[FIRST_ID].task["claim"]["github_login"]
+        self.assertIn(claim_holder, {"alice", "bob"})
 
     def test_accepted_push_with_lost_response_is_reconciled(self) -> None:
         class AmbiguousPushCoordinator(GitCoordinator):
@@ -201,7 +201,7 @@ class GitConcurrencyTests(unittest.TestCase):
         self.assertEqual("remote_reconciliation", result["sync"]["confirmation"])
         self.assertEqual(
             "alice",
-            self._remote_index().open[FIRST_ID].task["owner"]["login"],
+            self._remote_index().open[FIRST_ID].task["claim"]["github_login"],
         )
 
     def test_hub_push_command_never_forces_remote_history(self) -> None:

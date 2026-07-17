@@ -10,8 +10,8 @@ from .model import SCHEMA_VERSION, require_valid_task, validate_task
 from .util import atomic_write_json, read_json
 
 
-HUB_SCHEMA_VERSION = 1
-TOOL_API_VERSION = 1
+HUB_SCHEMA_VERSION = 2
+TOOL_API_VERSION = 2
 
 
 @dataclass(frozen=True)

@@ -39,7 +39,7 @@ def resolve_identity(actor_override: str | None = None) -> Identity:
     if shutil.which("gh") is None:
         raise WudiTaskError(
             "gh_not_found",
-            "GitHub CLI is required to identify the human owner.",
+            "GitHub CLI is required to identify the human actor.",
             details={"action": "Install gh and run gh auth login, then retry."},
         )
     process = subprocess.run(

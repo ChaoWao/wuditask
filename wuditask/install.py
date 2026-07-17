@@ -20,6 +20,7 @@ REQUIRED_SKILL_NAMES = {
     "wuditask-execute",
     "wuditask-install",
     "wuditask-list",
+    "wuditask-reconcile",
     "wuditask-release",
     "wuditask-selfupdate",
     "wuditask-show",

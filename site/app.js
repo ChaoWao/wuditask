@@ -9,6 +9,7 @@
   var search = document.getElementById("search");
   var repoFilter = document.getElementById("repo-filter");
   var stateFilter = document.getElementById("state-filter");
+  var deliveryFilter = document.getElementById("delivery-filter");
   var refresh = document.getElementById("refresh");
 
   function element(tag, className, text) {
@@ -31,7 +32,15 @@
       failed: "Failed",
       cancelled: "Cancelled",
       passed: "Passed",
-      skipped: "Skipped"
+      skipped: "Skipped",
+      unstarted: "Unstarted",
+      assigned: "Assigned",
+      implementing: "Implementing",
+      review: "Review",
+      ready_to_merge: "Ready to merge",
+      verification_needed: "Verification needed",
+      text_only: "Text only",
+      unavailable: "Unavailable"
     };
     return names[value] || value;
   }
@@ -47,11 +56,11 @@
     }).format(date);
   }
 
-  function ownerNode(owner) {
+  function claimNode(owner) {
     var wrapper = element("span", "owner");
     if (!owner) {
       wrapper.appendChild(element("span", "owner-placeholder", "-"));
-      wrapper.appendChild(element("span", "owner-name", "Unowned"));
+      wrapper.appendChild(element("span", "owner-name", "Unclaimed"));
       return wrapper;
     }
     var image = element("img");
@@ -165,9 +174,64 @@
     parent.appendChild(wrapper);
   }
 
+  function appendSource(parent, task) {
+    var source = task.source || {};
+    var delivery = task.delivery || {};
+    if (delivery.url) {
+      var link = element("a", "", delivery.url);
+      link.href = delivery.url;
+      link.target = "_blank";
+      link.rel = "noreferrer";
+      parent.appendChild(link);
+    } else {
+      parent.appendChild(element("p", "", "Text source: " + (source.reason || "No reason recorded.")));
+    }
+    if (source.fallback_reason) {
+      parent.appendChild(element("span", "verification", "Fallback: " + source.fallback_reason));
+    }
+  }
+
+  function appendDelivery(parent, delivery) {
+    if (!delivery) {
+      parent.appendChild(element("p", "", "Delivery state unavailable."));
+      return;
+    }
+    parent.appendChild(statusNode(delivery.delivery_state));
+    if (delivery.assignees && delivery.assignees.length) {
+      parent.appendChild(element("span", "verification", "Assignees: " + delivery.assignees.join(", ")));
+    }
+    (delivery.prs || []).forEach(function (pr) {
+      var row = element("div", "delivery-pr");
+      var link = element("a", "", pr.repo + "#" + pr.number);
+      link.href = pr.url;
+      link.target = "_blank";
+      link.rel = "noreferrer";
+      row.appendChild(link);
+      row.appendChild(document.createTextNode(" · " + pr.state + (pr.author ? " · " + pr.author : "")));
+      if (pr.checks) {
+        row.appendChild(
+          element(
+            "span",
+            "verification",
+            "Checks: " + pr.checks.successful + "/" + pr.checks.total +
+              " passed, " + pr.checks.pending + " pending, " + pr.checks.failed + " failed"
+          )
+        );
+      }
+      parent.appendChild(row);
+    });
+    if (delivery.error) {
+      parent.appendChild(element("span", "evidence", delivery.error));
+    }
+    if (delivery.fetched_at) {
+      parent.appendChild(element("span", "verification", "Fetched " + formattedDate(delivery.fetched_at)));
+    }
+  }
+
   function taskRow(task, archived) {
     var derived = archived ? null : task.derived;
     var state = archived ? task.completion.outcome : derived.state;
+    var deliveryState = task.delivery ? task.delivery.delivery_state : "unavailable";
     var details = element("details", "task-row");
     var summary = element("summary", "task-summary");
     summary.appendChild(element("span", "priority priority-" + task.priority, task.priority));
@@ -177,8 +241,9 @@
     name.appendChild(element("span", "task-id", task.id));
     summary.appendChild(name);
     summary.appendChild(element("span", "repo-name", task.repo));
-    summary.appendChild(ownerNode(task.owner));
+    summary.appendChild(claimNode(task.derived.claim_holder));
     summary.appendChild(statusNode(state));
+    summary.appendChild(statusNode(deliveryState));
     details.appendChild(summary);
 
     var body = element("div", "task-detail");
@@ -193,6 +258,14 @@
     var context = section("Context");
     appendContexts(context, task.context);
     left.appendChild(context);
+
+    var source = section("Canonical source");
+    appendSource(source, task);
+    left.appendChild(source);
+
+    var delivery = section("GitHub delivery");
+    appendDelivery(delivery, task.delivery);
+    left.appendChild(delivery);
 
     if (archived) {
       var completion = section("Completion");
@@ -238,7 +311,9 @@
       task.title,
       task.repo,
       task.goal,
-      task.owner ? task.owner.login : "",
+      task.derived.claim_holder ? task.derived.claim_holder.login : "",
+      (task.delivery.assignees || []).join(" "),
+      task.delivery.delivery_state,
       (task.context || []).join(" "),
       (task.acceptance_criteria || [])
         .map(function (criterion) {
@@ -261,12 +336,14 @@
     var query = search.value.trim().toLowerCase();
     var repo = repoFilter.value;
     var selectedState = stateFilter.value;
+    var selectedDelivery = deliveryFilter.value;
     var filtered = tasks.filter(function (task) {
       var taskState = archived ? task.completion.outcome : task.derived.state;
       return (
         (!query || searchText(task, archived).indexOf(query) !== -1) &&
         (!repo || task.repo === repo) &&
-        (!selectedState || taskState === selectedState)
+        (!selectedState || taskState === selectedState) &&
+        (!selectedDelivery || task.delivery.delivery_state === selectedDelivery)
       );
     });
 
@@ -356,9 +433,30 @@
     }
   }
 
+  function updateDeliveryOptions() {
+    var selected = deliveryFilter.value;
+    var present = {};
+    viewTasks().forEach(function (task) {
+      present[task.delivery.delivery_state] = true;
+    });
+    deliveryFilter.replaceChildren();
+    var all = element("option", "", "All delivery states");
+    all.value = "";
+    deliveryFilter.appendChild(all);
+    Object.keys(present).sort().forEach(function (state) {
+      var option = element("option", "", displayState(state));
+      option.value = state;
+      deliveryFilter.appendChild(option);
+    });
+    if (present[selected]) {
+      deliveryFilter.value = selected;
+    }
+  }
+
   function updateFilters() {
     updateRepositories();
     updateStateOptions();
+    updateDeliveryOptions();
   }
 
   function load(silent) {
@@ -406,7 +504,7 @@
     });
   });
 
-  [search, repoFilter, stateFilter].forEach(function (control) {
+  [search, repoFilter, stateFilter, deliveryFilter].forEach(function (control) {
     control.addEventListener(control === search ? "input" : "change", render);
   });
   refresh.addEventListener("click", function () {

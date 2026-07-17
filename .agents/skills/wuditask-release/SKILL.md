@@ -1,11 +1,11 @@
 ---
 name: wuditask-release
-description: Return a claimed WudiTask to the shared queue. Use when the current human owner asks to release, unclaim, put back, or stop owning a task without archiving it, including when work is waiting for a decision or was claimed in the wrong repository.
+description: Return a claimed WudiTask execution lease to the shared queue without archiving it. Use when the current claim holder asks to release or stop work.
 ---
 
 # Release a WudiTask
 
-Use the registered WudiTask CLI. Never clear owner or claim fields manually.
+Use the registered WudiTask CLI. Never clear the claim field manually.
 
 ## Locate the CLI
 
@@ -13,11 +13,20 @@ Read `~/.wuditask/config.json`, take its absolute `tool_path`, and invoke `pytho
 
 ## Release
 
-Confirm the current human owner intends to return the task to the queue and record a concrete reason:
+Confirm the current human claim holder intends to return the lease and record a concrete reason:
 
 ```bash
 python3 <tool_path>/tools/wuditask.py --json release TASK_ID \
   --reason "Waiting for product decision"
 ```
 
-Release is confirmed only when `ok=true`, `confirmed=true`, and `sync.confirmed=true`. Stop on `owner_mismatch`; never spoof a GitHub identity or release another person's task.
+For a GitHub Issue source, release removes the current user's Issue assignment,
+rechecks delivery, and then clears the Hub lease. It refuses to claim the task
+is back in the queue while the current user owns an active closing PR. Any
+GitHub/API or compensation uncertainty fails closed and leaves an actionable
+reconciliation error. Other assignees are never removed.
+
+Release is confirmed only when `ok=true`, `confirmed=true`, and
+`sync.confirmed=true`. Stop on `claim_holder_mismatch`; never spoof a GitHub
+identity or release another person's lease. Local `--hub --local` mode changes
+only the explicit local Hub and never edits a real Issue assignment.

@@ -1,6 +1,6 @@
 ---
 name: wuditask-show
-description: Show one WudiTask and its derived state without mutation. Use when the user provides or asks about a specific WudiTask ID and wants its repository, goal, context, acceptance criteria, owner, dependencies, links, or completion details.
+description: Show one WudiTask with separate coordination and live GitHub delivery state. Use for its execution repo, canonical source, goal, claim, dependencies, acceptance, or completion details.
 ---
 
 # Show a WudiTask
@@ -17,6 +17,8 @@ Read `~/.wuditask/config.json`, take its absolute `tool_path`, and invoke `pytho
 python3 <tool_path>/tools/wuditask.py --json show TASK_ID
 ```
 
-Present the task fields relevant to the user's question. Preserve the task ID, repository, ownership, derived state, goal, context, acceptance criteria, dependencies, links, and completion evidence exactly.
+Present the relevant task fields exactly. Distinguish the WudiTask execution
+claim from GitHub assignees and closing-PR authors. The structured `source` is
+canonical; `links` are supporting references.
 
 Do not use a mutating command for inspection. Use `$wuditask-list` or `/wuditask-list` for queue-wide queries, and `$wuditask-dep-check` or `/wuditask-dep-check` for expanded blocker analysis.

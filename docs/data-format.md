@@ -1,69 +1,117 @@
-# WudiTask 数据格式 v1
+# WudiTask 数据格式 v2
 
-本文档是人类可读的规范；机器可读版本位于工具仓的
-`schemas/task.schema.json`，最终校验行为以对应工具版本的
-`wuditask validate` 为准。Task Hub 不复制 schema，而是在 `hub.json` 中
-声明严格契约：
+机器契约位于 `schemas/task.schema.json`；Hub 必须声明相同版本：
 
 ```json
 {
-  "schema_version": 1,
-  "tool_api_version": 1
+  "schema_version": 2,
+  "tool_api_version": 2
 }
 ```
 
-该文件缺失、包含额外字段或任一版本不匹配时，CLI 在任何任务读写前拒绝
-操作。
+WudiTask 不支持混用 v1/v2。升级时必须一次性迁移 Hub manifest 与所有任务。
 
-## 存储规则
+## 存储与状态
 
-每个任务独占一个 JSON 文件：
+- open task：`data/open/<id>.json`
+- archived task：`data/archive/<year>/<id>.json`
 
-- 未归档：`data/open/<id>.json`
-- 已归档：`data/archive/<完成年份>/<id>.json`
+任务不会删除。状态仍由位置、依赖、`claim` 和 `completion` 推导，不保存可漂移
+的 WudiTask `status`：
 
-文件名必须等于任务 `id`。任务不会删除；`archive` 将同一个 JSON 从 open 移到 archive 并加入 `completion`。这样，不同 agent 修改不同任务时通常只接触不同文件，Git 冲突概率很低。
-
-JSON 采用 UTF-8、两空格缩进、末尾换行。字段名固定，未知字段会被拒绝。
-Hub 根目录只保存 `hub.json`、`data/` 及部署适配文件；CLI、skills、schema
-和 dashboard 源码属于独立工具仓。
-
-## 状态不是字段
-
-WudiTask 不保存可漂移的 `status`：
-
-| 条件 | 推导状态 |
+| 条件 | coordination state |
 | --- | --- |
-| 位于 open，`claim=null`，所有依赖已完成 | `ready` |
-| 位于 open，`claim=null`，至少一个依赖未完成 | `blocked` |
-| 位于 open，`claim` 非空 | `in_progress` |
-| 位于 archive | `completion.outcome`：`done`、`failed` 或 `cancelled` |
+| open、`claim=null`、依赖完成 | `ready` |
+| open、`claim=null`、依赖未完成 | `blocked` |
+| open、`claim` 非空 | `in_progress` |
+| archive | `completion.outcome` |
 
-只有归档结果为 `done`，并且每条验收标准都有 `passed` 与非空证据，才会解除下游任务的依赖。
+GitHub delivery 是另一条正交状态，通过 canonical `source` 实时派生：
+`unstarted`、`assigned`、`implementing`、`review`、`ready_to_merge`、
+`verification_needed`、`cancelled`、`text_only` 或 `unavailable`。它不写回任务
+JSON，也不直接解除 WudiTask 依赖。
 
-## 字段
+## 基础字段
 
-### 基础字段
+| 字段 | 说明 |
+| --- | --- |
+| `schema_version` | 固定为 `2` |
+| `id` | `WDT-YYYYMMDDTHHMMSSZ-XXXXXX` |
+| `title` | 简短可扫描标题 |
+| `repo` | 实际执行仓，固定为 GitHub `owner/name` |
+| `source` | 唯一 canonical Issue、PR 或解释过的 text source |
+| `created_by` | 添加任务的 GitHub human identity |
+| `priority` | `P0` 到 `P3` |
+| `created_at` | UTC RFC 3339 时间 |
+| `goal` | 期望结果 |
+| `context` | 执行约束、背景、入口与非目标 |
+| `acceptance_criteria` | 至少一条可验证完成条件 |
+| `dependencies` | 已存在的 WudiTask ID |
+| `claim` | 独占执行租约或 `null` |
+| `links` | 辅助资料；不再承载 canonical source |
+| `completion` | 仅 archived task 存在 |
 
-| 字段 | 类型 | 规则 |
-| --- | --- | --- |
-| `schema_version` | integer | 当前固定为 `1` |
-| `id` | string | `WDT-YYYYMMDDTHHMMSSZ-XXXXXX`，UTC 时间加 6 位随机十六进制 |
-| `title` | string | 简短、可扫描的任务名称 |
-| `repo` | string | 工作仓库，固定为 GitHub `owner/name` |
-| `created_by` | identity | 添加任务的人类 GitHub 身份 |
-| `owner` | identity 或 null | execute 后的责任人；不是 agent 身份 |
-| `priority` | enum | `P0`、`P1`、`P2`、`P3`，数字越小越优先 |
-| `created_at` | string | UTC RFC 3339，秒精度，必须以 `Z` 结尾 |
-| `goal` | string | 期望产生的具体结果 |
-| `context` | string[] | agent 开工所需的约束、背景、入口和非目标 |
-| `acceptance_criteria` | criterion[] | 至少一条可验证的完成条件 |
-| `dependencies` | string[] | 其他 WudiTask ID；不复制其仓库或验收内容 |
-| `claim` | claim 或 null | execute 的并发确认记录 |
-| `links` | string[] | canonical PR/Issue、设计稿或文档链接；有明确归属仓库时优先包含 Issue/PR URL |
-| `completion` | completion | 仅 archive 文件存在 |
+schema v2 没有 `owner`。业务责任人来自 GitHub assignee；claim holder 直接由
+`claim.github_login/github_id` 表示。
 
-### Identity
+## Canonical source
+
+### 执行仓 Issue
+
+```json
+{
+  "kind": "github_issue",
+  "repo": "acme/api",
+  "number": 42
+}
+```
+
+### Pull request
+
+```json
+{
+  "kind": "github_pull_request",
+  "repo": "acme/api",
+  "number": 88
+}
+```
+
+URL 由 `kind + repo + number` 唯一推导，避免重复字段漂移。
+
+### Hub fallback Issue
+
+当业务仓关闭 Issues、当前用户没有建 Issue 权限，或跨仓工作没有合适的单一
+归属仓时，canonical Issue 可以在配置的 Task Hub：
+
+```json
+{
+  "kind": "github_issue_fallback",
+  "repo": "acme/wuditask-hub",
+  "number": 17,
+  "fallback_reason": "The execution repository has Issues disabled."
+}
+```
+
+`github_issue` 与 `github_pull_request` 必须位于执行仓，且没有
+`fallback_reason`。只有 `github_issue_fallback` 可以跨仓；它必须指向安装配置的
+Hub，并包含 `fallback_reason`。CLI 在写 Hub 前还会确认该 Issue/PR 存在且可读。
+这让 JSON Schema 与 runtime 使用同一种结构，而不是靠可选字段猜测语义。Hub
+Issue 的正文必须说明执行仓、fallback 原因、范围与验收意图。
+
+### Text source
+
+```json
+{
+  "kind": "text",
+  "reason": "Neither the execution repository nor the Hub can host an Issue."
+}
+```
+
+Text 只是最后手段。暂时的网络、认证或 API 故障不能静默降级成 text source。
+
+## Identity 与 claim
+
+Identity：
 
 ```json
 {
@@ -72,9 +120,24 @@ WudiTask 不保存可漂移的 `status`：
 }
 ```
 
-`github_id` 是 GitHub numeric ID，比可改名的 login 更稳定。运行远端写操作时，工具始终通过 `gh api user` 获取身份。系统没有 `agent_owner` 字段。
+Claim：
 
-### Acceptance criterion
+```json
+{
+  "token": "nonce",
+  "github_login": "octocat",
+  "github_id": 583231,
+  "claimed_at": "2026-07-11T12:04:10Z"
+}
+```
+
+`token` 标识一次具体租约，用于安全补偿，不是秘密。远端写操作始终通过
+`gh api user` 验证 human identity；不可变的 `github_id` 是授权键，login 用于
+展示并在用户改名后的下一次 execute 中刷新。agent 不是 owner。
+
+## 验收与归档
+
+Criterion：
 
 ```json
 {
@@ -87,140 +150,58 @@ WudiTask 不保存可漂移的 `status`：
 }
 ```
 
-`verification.type` 只能是：
+`verification.type` 只能是 `command`、`file`、`manual` 或 `url`。
 
-- `command`：在工作仓库执行的确定性命令。
-- `file`：应检查的文件路径与期望内容。
-- `url`：应检查的 HTTP URL 与期望结果。
-- `manual`：必须由人或 agent 进行的明确观察。
+`completion.outcome` 是 `done`、`failed` 或 `cancelled`。`done` 必须同时满足：
 
-`description` 说明“什么算完成”，`verification` 说明“怎样证明”。两者都不能为空。
+1. canonical Issue 当前 completed（通常由 closing PR merge 触发），或 canonical
+   PR merged；open/reopened Issue 仍是 active；
+2. 每条 criterion 都有 `passed` 与非空 evidence；
+3. 当前 claim holder 完成远端 archive push。
 
-### Dependency
+`failed`/`cancelled` 不要求先领取：只要任务当前无人领取，就可以用一次普通 Hub
+push 原子归档，即使依赖仍 blocked。若已有 claim，仍只允许对应 holder 归档。
+GitHub-backed `cancelled` 还必须先将 canonical delivery 以 `NOT_PLANNED` 关闭。
+`failed` 接受 `NOT_PLANNED`，也接受 delivery 已完成但 WudiTask 验收失败；活跃
+delivery 和未知状态都不能归档。text source 没有这层外部 guard。这些 outcome
+永不解除下游依赖。
 
-`dependencies` 只存任务 ID：
+Issue `CLOSED/NOT_PLANNED` 只能映射为 cancelled 候选，不能作为 done。只有
+WudiTask archive `done` 且证据完整才解除下游依赖。
 
-```json
-"dependencies": [
-  "WDT-20260710T080000Z-12AB34"
-]
-```
-
-被引用任务是其 `repo`、`goal` 和 `acceptance_criteria` 的唯一事实源。`dep-check` 会实时展开这些内容。这样修改依赖任务时，不会在所有下游文件中留下过期副本。
-
-添加任务时依赖 ID 必须已存在。校验器仍会检查手工编辑、错误 merge 或历史导入造成的缺失依赖和环。
-
-### Claim
+## 完整 open task 示例
 
 ```json
 {
-  "token": "d7c3f832d0644bbca8f43fb48d2f53ae",
-  "github_login": "octocat",
-  "github_id": 583231,
-  "claimed_at": "2026-07-11T12:04:10Z"
-}
-```
-
-`token` 是每次领取生成的随机 nonce，用于识别一次 claim；它不是 agent 身份或秘密。owner 与 claim 中的 GitHub identity 必须一致。
-
-### Completion
-
-```json
-{
-  "outcome": "done",
-  "completed_at": "2026-07-11T13:20:00Z",
-  "completed_by": {
-    "login": "octocat",
-    "github_id": 583231
-  },
-  "result": "Validation added and regression tests pass",
-  "acceptance_results": [
-    {
-      "criterion_id": "AC-1",
-      "status": "passed",
-      "evidence": "python3 -m unittest tests.test_upload: 12 tests passed"
-    }
-  ]
-}
-```
-
-`outcome=done` 时，每个 criterion 必须恰好有一个 `passed` 结果和非空 evidence。`failed` 或 `cancelled` 会永久保存记录，但不会让依赖它的任务变为 ready。
-
-## 完整 open 示例
-
-```json
-{
-  "schema_version": 1,
+  "schema_version": 2,
   "id": "WDT-20260711T120000Z-A1B2C3",
   "title": "Harden upload validation",
   "repo": "acme/api",
-  "created_by": {
-    "login": "octocat",
-    "github_id": 583231
+  "source": {
+    "kind": "github_issue",
+    "repo": "acme/api",
+    "number": 42
   },
-  "owner": null,
+  "created_by": {
+    "login": "alice",
+    "github_id": 1001
+  },
   "priority": "P1",
   "created_at": "2026-07-11T12:00:00Z",
-  "goal": "Reject malformed uploads before object storage",
-  "context": [
-    "Preserve the current public API",
-    "The upload entry point is src/upload.py"
-  ],
+  "goal": "Reject malformed uploads before object storage.",
+  "context": ["Preserve the public API."],
   "acceptance_criteria": [
     {
       "id": "AC-1",
-      "description": "Malformed files return HTTP 400",
+      "description": "Malformed files return HTTP 400.",
       "verification": {
         "type": "command",
         "value": "python3 -m unittest tests.test_upload"
       }
     }
   ],
-  "dependencies": [
-    "WDT-20260710T080000Z-12AB34"
-  ],
+  "dependencies": [],
   "claim": null,
-  "links": [
-    "https://github.com/acme/api/issues/42"
-  ]
+  "links": []
 }
 ```
-
-## 信息充分性
-
-`add` 至少需要 title、repo、goal 和一条 acceptance criterion。缺失时不会猜测，而是返回：
-
-```json
-{
-  "ok": false,
-  "error": {
-    "code": "insufficient_task_spec",
-    "message": "The task needs more information before it can be added.",
-    "details": {
-      "missing": ["acceptance_criteria"],
-      "questions": ["What observable checks prove this task is complete?"]
-    }
-  }
-}
-```
-
-agent skill 应把 `questions` 原样或等价地询问用户，获得答案后再执行 add。
-
-### Issue/PR 与任务文本的边界
-
-有明确归属 GitHub 仓库的工作，以已有匹配 open PR、已有匹配 open Issue 或在该仓新建的 Issue 作为完整问题叙述，并把规范 URL 放入 `links`。WudiTask 的 `goal`、`context` 与 `acceptance_criteria` 是精简执行合同，不复制整篇 Issue/PR 正文，避免两份叙述漂移。
-
-没有合适仓库承载 Issue/PR 时，完整叙述才保留在 WudiTask 文本字段中。schema v1 的 `repo` 仍表示实际执行仓库且为必填项；agent 不得虚构仓库，也不得借用 Task Hub 的 Issue 描述其他仓库工作。
-
-## 修改格式
-
-普通参与者不应直接编辑 JSON，必须使用
-`wuditask add/execute/archive/release`。格式升级是严格的一次性切换：
-
-1. 在工具仓更新 schema、validator、本文档与测试并发布不可变版本。
-2. 用该版本离线迁移 Hub 数据并更新 `hub.json`。
-3. 用 `python3 TOOL/tools/wuditask.py --hub HUB --local validate` 验证。
-4. 在同一次切换中更新 Hub Pages 固定的工具版本和所有客户端安装。
-
-工具不会读取旧字段、猜测旧格式或自动迁移 live Hub；版本不匹配时直接
-停止。

@@ -20,8 +20,9 @@ class ModelTests(unittest.TestCase):
             task = add_task(repository, TASK_ID)
 
         self.assertEqual([], validate_task(task, archived=False))
-        self.assertIsNone(task["owner"])
         self.assertIsNone(task["claim"])
+        self.assertNotIn("owner", task)
+        self.assertEqual("text", task["source"]["kind"])
         self.assertNotIn("status", task)
         self.assertEqual({"login": "alice", "github_id": 1001}, task["created_by"])
 
@@ -39,10 +40,53 @@ class ModelTests(unittest.TestCase):
 
         self.assertEqual("insufficient_task_spec", raised.exception.code)
         self.assertEqual(
-            ["repo", "goal", "acceptance_criteria"],
+            ["repo", "goal", "source", "acceptance_criteria"],
             raised.exception.details["missing"],
         )
-        self.assertEqual(3, len(raised.exception.details["questions"]))
+        self.assertEqual(4, len(raised.exception.details["questions"]))
+
+    def test_github_source_outside_execution_repo_requires_reason(self) -> None:
+        value = spec()
+        value["source"] = {
+            "kind": "github_issue_fallback",
+            "repo": "acme/wuditask-hub",
+            "number": 42,
+        }
+        with tempfile.TemporaryDirectory() as temporary:
+            repository = make_repository(Path(temporary))
+            with self.assertRaises(Exception) as raised:
+                create_task(
+                    repository,
+                    value,
+                    ACTOR,
+                    task_id=TASK_ID,
+                    now="2026-07-11T12:00:00Z",
+                )
+        self.assertTrue(
+            any(
+                issue["path"] == "$.source.fallback_reason"
+                for issue in raised.exception.details["issues"]
+            )
+        )
+
+    def test_github_source_outside_execution_repo_accepts_reason(self) -> None:
+        value = spec()
+        value["source"] = {
+            "kind": "github_issue_fallback",
+            "repo": "acme/wuditask-hub",
+            "number": 42,
+            "fallback_reason": "The execution repository has Issues disabled.",
+        }
+        with tempfile.TemporaryDirectory() as temporary:
+            repository = make_repository(Path(temporary))
+            task = create_task(
+                repository,
+                value,
+                ACTOR,
+                task_id=TASK_ID,
+                now="2026-07-11T12:00:00Z",
+            )["task"]
+        self.assertEqual("acme/wuditask-hub", task["source"]["repo"])
 
     def test_unknown_fields_are_rejected(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

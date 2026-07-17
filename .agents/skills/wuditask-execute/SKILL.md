@@ -1,6 +1,6 @@
 ---
 name: wuditask-execute
-description: Claim and begin a ready WudiTask safely. Use when the user asks to take, pop, claim, start, or execute the next shared task or a specific WudiTask ID. Enforce repository matching, dependency readiness, human GitHub ownership, and confirmed remote synchronization before starting work.
+description: Claim and begin a ready WudiTask safely. Enforce execution-repository matching, dependencies, live canonical GitHub ownership, and a confirmed WudiTask lease before work starts.
 ---
 
 # Execute a WudiTask
@@ -31,8 +31,26 @@ Start work only when all are true:
 - `confirmed` is `true`;
 - `sync.confirmed` is `true`;
 - returned task `repo` equals the current GitHub work repository;
-- the dependency report says the task is ready.
+- the dependency report says the task is ready;
+- live GitHub delivery is available and the current user is eligible;
+- `work_authorized` is `true`.
 
-Treat the returned goal, context, acceptance criteria, dependencies, and links as the work contract. Follow links to the canonical Issue or PR for the full narrative.
+Treat the returned goal, context, acceptance criteria, dependencies, and
+`source` as the work contract. Follow the canonical source for the full
+narrative. `links` are auxiliary only.
 
-On `claim_conflict`, do not work that task. On `push_status_unknown`, fail closed and retry `execute TASK_ID` using `error.details.task_id`; never let recovery claim a second task. Never spoof a GitHub identity.
+Every GitHub-backed claim is rechecked after the Hub push. If the Issue is
+unassigned, execute first establishes the Hub lease, assigns the current
+GitHub user, and then rechecks delivery. Assignment failure or a concurrent
+owner causes token-guarded compensation; do not start work. If
+another assignee or active closing-PR author owns delivery, respect
+`delivery_owned_elsewhere`.
+
+An explicit execute of a delivery-complete task may acquire the lease only to
+perform acceptance verification and archive it. It returns
+`work_authorized=false`; automatic execute skips such tasks. Local `--hub
+--local` mode never assigns a real GitHub Issue and cannot claim an unassigned
+GitHub-backed task for implementation.
+
+On `claim_conflict`, GitHub delivery unavailability, reconciliation failure, or
+`push_status_unknown`, fail closed. Never spoof a GitHub identity.

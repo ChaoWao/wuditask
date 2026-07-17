@@ -1,66 +1,82 @@
 ---
 name: wuditask-add
-description: Add or record a fully specified item in the shared WudiTask queue. Use when the user asks to create, add, enqueue, or remember work. Prefer an existing GitHub Issue or PR as the canonical description when the work has a clear owning repository; create an Issue there when needed, and use WudiTask fields as a concise execution contract.
+description: Add a fully specified item to the shared WudiTask queue. Use the owning repository's Issue or PR as the canonical source when possible, otherwise create a fallback Issue in the configured WudiTask Hub; text is the last resort.
 ---
 
 # Add a WudiTask
 
-Use the registered WudiTask CLI for the task mutation. Do not edit task JSON directly.
+Use the registered CLI for the queue mutation. Never edit task JSON directly.
 
-## Locate the CLI
+## Locate the installation
 
-1. Read `~/.wuditask/config.json` and take its absolute `tool_path`.
-2. If it is missing or stale, ask the user to invoke `$wuditask-install` or `/wuditask-install`.
-3. Invoke `python3 <tool_path>/tools/wuditask.py --json ...`.
-
-The CLI reads `hub_remote` and `hub_branch` from the same config. Do not infer the
-task Hub from the tool clone's Git remote.
-
-The CLI obtains the human owner from `gh api user` for remote writes.
+Read `~/.wuditask/config.json`; use its absolute `tool_path` for the CLI and
+derive the fallback Issue repository only from `hub_remote`. Do not infer the
+Hub from the tool clone's origin.
 
 ## Build the execution contract
 
-Collect:
+Collect a concise title, execution `repo`, concrete goal, necessary context,
+priority, existing WudiTask dependencies, and independently verifiable
+acceptance criteria. Resolve ambiguity before creating an Issue.
 
-- a concise title;
-- target execution repository;
-- concrete goal;
-- only the context and constraints needed to execute;
-- at least one observable acceptance criterion;
-- a verification method for each criterion;
-- priority and dependency task IDs.
+`repo` always identifies where the work executes. It is independent from the
+repository holding the canonical `source`.
 
-Keep `goal`, `context`, and acceptance criteria concise. They are the executable contract, not a copy of the full Issue or PR body. Do not invent acceptance criteria when the user's intent is ambiguous.
+## Establish the canonical source
 
-Dependencies must already exist as WudiTask IDs. Add dependency tasks first instead of embedding free-form cross-repository descriptions.
+Choose exactly one source in this order:
 
-Resolve every ambiguity before creating an Issue or mutating WudiTask. Do not leave an incomplete or orphaned Issue when the execution contract is not yet sufficient.
+1. Reuse a matching open PR in the execution repository.
+2. Reuse a matching open Issue in the execution repository.
+3. Inspect the execution repository's templates and create the Issue there.
+4. If that repository cannot host the narrative because Issues are disabled,
+   the actor lacks permission, or cross-repository work has no suitable single
+   home, reuse or create a fallback Issue in the configured Hub repository.
+5. Use an explained text source only when neither repository can host a
+   GitHub Issue or PR. Do not turn a transient authentication or network error
+   into a silent text fallback.
 
-## Establish the canonical description
+For a Hub fallback, use its `Fallback task` Issue form and record the target
+execution repository, concrete fallback reason, complete narrative, scope,
+acceptance intent, and dependencies. The WudiTask `source.repo` is then the Hub
+while task `repo` remains the execution repository.
 
-After the narrative and execution contract are complete:
-
-1. If the work already has a matching open PR, use that PR as the canonical narrative.
-2. Otherwise search the target repository for a matching open Issue and reuse it when it describes the same work.
-3. If no match exists, inspect that repository's Issue templates and create an Issue in that repository containing the complete motivation, scope, constraints, and acceptance intent.
-4. Put the canonical Issue or PR URL in the WudiTask `links` field.
-
-Do not create an Issue in the WudiTask hub to describe work owned by another repository. Do not create an empty PR merely to hold a description. If the repository is a suitable canonical home but Issue creation fails because of authentication, permissions, validation, or network errors, stop and report the failure; do not silently fall back to text.
-
-Only when no suitable GitHub repository exists for the narrative, keep the complete description in the WudiTask text fields, record the reason for having no Issue or PR link in `context`, and report it to the user. WudiTask schema v1 still requires an execution repository; ask the user for it rather than inventing one.
+Do not create an empty PR merely to hold a description. `links` contains only
+supporting references; it is not the canonical source.
 
 ## Add the task
+
+Target-repository Issue:
 
 ```bash
 python3 <tool_path>/tools/wuditask.py --json add \
   --repo acme/api \
+  --source https://github.com/acme/api/issues/42 \
   --title "Harden upload validation" \
   --goal "Reject malformed uploads before object storage" \
   --context "Preserve the public API" \
   --accept "Malformed files return HTTP 400" \
   --verify "command::python3 -m unittest tests.test_upload" \
-  --link "https://github.com/acme/api/issues/42" \
   --priority P1
 ```
 
-If the CLI returns `insufficient_task_spec`, ask the questions in `error.details.questions`, then retry. Report the task ID only when `ok=true`, `confirmed=true`, and `sync.confirmed=true`.
+Hub fallback Issue:
+
+```bash
+python3 <tool_path>/tools/wuditask.py --json add \
+  --repo acme/api \
+  --source https://github.com/acme/wuditask-hub/issues/42 \
+  --source-fallback-reason "The execution repository has Issues disabled" \
+  --title "Harden upload validation" \
+  --goal "Reject malformed uploads before object storage" \
+  --accept "Malformed files return HTTP 400"
+```
+
+Text-only fallback uses `--text-source-reason TEXT` instead of `--source`.
+
+The CLI verifies that every GitHub source exists and is readable before the
+Hub push. A cross-repository source is accepted only as a fallback Issue in the
+configured Hub; an arbitrary third-party Issue or PR is rejected.
+
+Report the task ID only when `ok=true`, `confirmed=true`, and
+`sync.confirmed=true`.
