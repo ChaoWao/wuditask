@@ -253,18 +253,51 @@ class SiteTests(unittest.TestCase):
             workflow = (output / "workflow.html").read_text(encoding="utf-8")
             self.assertIn('<html lang="en">', workflow)
             self.assertIn("<h1>WudiTask workflow</h1>", workflow)
-            self.assertIn("<h2>1. Assign on GitHub</h2>", workflow)
-            self.assertIn("<h2>2. Execute atomically</h2>", workflow)
-            self.assertIn("<h2>3. Check the work</h2>", workflow)
+            self.assertIn(
+                '<figure class="workflow-map" aria-labelledby="workflow-map-title">',
+                workflow,
+            )
+            self.assertIn(
+                '<h2 id="workflow-map-title">End-to-end task lifecycle</h2>',
+                workflow,
+            )
+            for stage in ("define", "queue", "select", "claim", "deliver", "close"):
+                self.assertIn(f'data-stage="{stage}"', workflow)
+            self.assertIn("Atomic execution boundary", workflow)
+            self.assertIn("No confirmed Hub push, no work", workflow)
+            self.assertIn("Only archived done unlocks dependents", workflow)
+            self.assertIn("Failed / cancelled keeps dependents blocked", workflow)
+            self.assertIn("Read-only Pages projection", workflow)
+            self.assertIn("GitHub live delivery", workflow)
+            self.assertIn("Validated Hub snapshot", workflow)
+            self.assertIn("Owner gate", workflow)
+            self.assertIn("Assigned to me + no run", workflow)
+            self.assertIn("Unowned → Self-assign", workflow)
+            self.assertIn("Explicit choice → Add co-assignee", workflow)
+            self.assertIn("Auto-select → Skip other-owned", workflow)
+            self.assertIn("Assignment failed or unconfirmed → Stop", workflow)
+            self.assertIn("Confirmed + drift → Compensate exact new run", workflow)
+            self.assertIn("No active agents → Creator only", workflow)
+            self.assertIn(
+                '<ol class="workflow-stage-track" aria-label="Main lifecycle path">',
+                workflow,
+            )
+            self.assertIn(
+                '<section class="workflow-decisions" aria-labelledby="workflow-decisions-title">',
+                workflow,
+            )
+            self.assertNotIn("<script", workflow)
+            self.assertIn("<h2>1. Define and queue the task</h2>", workflow)
+            self.assertIn("<h2>2. Assign and select work</h2>", workflow)
+            self.assertIn("<h2>3. Cross the atomic Hub boundary</h2>", workflow)
+            self.assertIn("<h2>4. Observe and deliver</h2>", workflow)
+            self.assertIn("<h2>5. Release, archive or unassign</h2>", workflow)
             self.assertIn("<code>active_agents</code>", workflow)
             self.assertIn(
                 '<pre><code class="language-bash">wuditask check [TASK_ID]</code></pre>',
                 workflow,
             )
-            self.assertIn(
-                "Release stops only the matching login and <code>run_id</code>",
-                workflow,
-            )
+            self.assertIn("release each exact run first", workflow)
             self.assertNotIn("dep-check", workflow)
             self.assertNotIn("reconcile", workflow)
             self.assertNotIn("WUDITASK_WORKFLOW_CONTENT", workflow)

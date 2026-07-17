@@ -30,15 +30,216 @@
       </div>
     </header>
 
-    <main id="main-content" class="document-shell">
-      <article class="document-card markdown-body">
+    <main id="main-content" class="document-shell workflow-shell">
+      <article class="document-card workflow-document">
+        <header class="markdown-body workflow-intro">
+          <h1>WudiTask workflow</h1>
+          <p>
+            One task moves through two durable systems: GitHub owns the work
+            contract and delivery, while the Task Hub owns dependencies and
+            active agent coordination. The diagram shows the complete path
+            from a new Issue or pull request to verified archive.
+          </p>
+        </header>
+
+        <figure class="workflow-map" aria-labelledby="workflow-map-title">
+          <div class="workflow-map-heading">
+            <div>
+              <p class="workflow-eyebrow">Repository-wide system map</p>
+              <h2 id="workflow-map-title">End-to-end task lifecycle</h2>
+              <p>Follow the numbered path, then use the decision cards for every exit and retry loop.</p>
+            </div>
+            <ul class="workflow-legend" aria-label="System legend">
+              <li class="legend-github">GitHub source</li>
+              <li class="legend-agent">CLI / agent</li>
+              <li class="legend-hub">Task Hub</li>
+              <li class="legend-pages">Read-only Pages</li>
+            </ul>
+          </div>
+
+          <ul class="workflow-principles" aria-label="Core workflow rules">
+            <li><strong>Assignment is not execution</strong></li>
+            <li><strong>No confirmed Hub push, no work</strong></li>
+            <li><strong>Only archived done unlocks dependents</strong></li>
+          </ul>
+
+          <section class="workflow-systems" aria-labelledby="workflow-systems-title">
+            <h3 id="workflow-systems-title" class="visually-hidden">System boundaries</h3>
+            <div class="workflow-system system-github">
+              <span>GitHub</span>
+              <strong>Canonical Issue or PR</strong>
+              <small>Narrative, acceptance, owners, PRs, reviews, checks and delivery state</small>
+            </div>
+            <span class="workflow-system-arrow workflow-system-arrow-both" aria-hidden="true">↔</span>
+            <div class="workflow-system system-agent">
+              <span>WudiTask</span>
+              <strong>CLI and agent skills</strong>
+              <small>Add, assign, check, execute, release, unassign and archive</small>
+            </div>
+            <span class="workflow-system-arrow workflow-system-arrow-both" aria-hidden="true">↔</span>
+            <div class="workflow-system system-hub">
+              <span>Task Hub Git</span>
+              <strong>Coordination record</strong>
+              <small>Priority, dependencies, creator, active agents and archived evidence</small>
+            </div>
+          </section>
+
+          <section class="workflow-pages-flow" aria-label="Read-only Pages inputs">
+            <div class="workflow-pages-feed feed-github">
+              <span>GitHub live delivery</span>
+              <small>Owners, PRs, reviews and checks</small>
+            </div>
+            <span class="workflow-pages-arrow" aria-hidden="true">↘</span>
+            <div class="workflow-system system-pages">
+              <span>GitHub Pages</span>
+              <strong>Read-only Pages projection</strong>
+              <small>Tasks and DAG from validated Hub data plus live GitHub delivery</small>
+            </div>
+            <span class="workflow-pages-arrow" aria-hidden="true">↙</span>
+            <div class="workflow-pages-feed feed-hub">
+              <span>Validated Hub snapshot</span>
+              <small>Open, archive, dependencies and active logins</small>
+            </div>
+          </section>
+
+          <ol class="workflow-stage-track" aria-label="Main lifecycle path">
+            <li class="workflow-stage stage-github" data-stage="define">
+              <span class="workflow-stage-number">01 · Define</span>
+              <h3>Write the contract</h3>
+              <p>Create an Issue or PR with the goal, constraints and acceptance criteria.</p>
+            </li>
+            <li class="workflow-stage stage-hub" data-stage="queue">
+              <span class="workflow-stage-number">02 · Queue</span>
+              <h3>Add minimal state</h3>
+              <p><code>add</code> stores the source link, priority and task dependencies in Hub.</p>
+            </li>
+            <li class="workflow-stage stage-agent" data-stage="select">
+              <span class="workflow-stage-number">03 · Select</span>
+              <h3>Check readiness</h3>
+              <p>Choose assigned-to-me idle work first, then unowned ready work.</p>
+            </li>
+            <li class="workflow-stage stage-boundary" data-stage="claim">
+              <span class="workflow-stage-number">04 · Claim</span>
+              <h3>Atomic execution boundary</h3>
+              <p>After any co-assignment, an ordinary non-force Hub push adds this login and run.</p>
+            </li>
+            <li class="workflow-stage stage-github" data-stage="deliver">
+              <span class="workflow-stage-number">05 · Deliver</span>
+              <h3>Implement and verify</h3>
+              <p>Work in the execution repo; GitHub remains canonical for PR, review and checks.</p>
+            </li>
+            <li class="workflow-stage stage-success" data-stage="close">
+              <span class="workflow-stage-number">06 · Close</span>
+              <h3>Archive the outcome</h3>
+              <p>Record terminal delivery, result and evidence; clear the active agent set.</p>
+            </li>
+          </ol>
+
+          <section class="workflow-decisions" aria-labelledby="workflow-decisions-title">
+            <h3 id="workflow-decisions-title" class="visually-hidden">Lifecycle decision paths</h3>
+            <section class="workflow-decision-card">
+              <header>
+                <span>Readiness gate</span>
+                <h3>Are all dependencies archived done?</h3>
+              </header>
+              <div class="workflow-outcome outcome-yes">
+                <strong>Yes → Ready</strong>
+                <p>Continue to owner selection and execute.</p>
+              </div>
+              <div class="workflow-outcome outcome-wait">
+                <strong>No → Blocked</strong>
+                <p>Wait for upstream evidence and done archive, then run <code>check</code> again.</p>
+              </div>
+              <p class="workflow-decision-note">Closing or merging GitHub alone never unlocks a dependent task.</p>
+            </section>
+
+            <section class="workflow-decision-card decision-owner">
+              <header>
+                <span>Owner gate</span>
+                <h3>May this login select the task?</h3>
+              </header>
+              <div class="workflow-outcome outcome-yes">
+                <strong>Assigned to me + no run → Preferred</strong>
+                <p>Automatic execute chooses this ready work before unowned work.</p>
+              </div>
+              <div class="workflow-outcome outcome-loop">
+                <strong>Unowned → Self-assign</strong>
+                <p>Add this login on GitHub, confirm it, then attempt the separate Hub start.</p>
+              </div>
+              <div class="workflow-outcome outcome-loop">
+                <strong>Explicit choice → Add co-assignee</strong>
+                <p>Join without removing any existing owner.</p>
+              </div>
+              <div class="workflow-outcome outcome-stop">
+                <strong>Auto-select → Skip other-owned</strong>
+                <p>Never silently adopt work owned only by somebody else.</p>
+              </div>
+              <div class="workflow-outcome outcome-stop">
+                <strong>Assignment failed or unconfirmed → Stop</strong>
+                <p>Do not attempt a Hub start until GitHub confirms the owner update.</p>
+              </div>
+            </section>
+
+            <section class="workflow-decision-card decision-focus">
+              <header>
+                <span>Authorization gate</span>
+                <h3>Did the exact Hub start reach the remote?</h3>
+              </header>
+              <div class="workflow-outcome outcome-yes">
+                <strong>Confirmed + fresh → Work authorized</strong>
+                <p>Re-read GitHub ownership and delivery before changing the execution repo.</p>
+              </div>
+              <div class="workflow-outcome outcome-stop">
+                <strong>Failed or unknown → Do not work</strong>
+                <p>Assignment remains. Use <code>check</code>; if the exact run exists, release it before retrying.</p>
+              </div>
+              <div class="workflow-outcome outcome-stop">
+                <strong>Confirmed + drift → Compensate exact new run</strong>
+                <p>Remove only this start. If compensation is unconfirmed, reconciliation is required and work stays denied.</p>
+              </div>
+              <p class="workflow-decision-note">Different logins may run together; one login gets at most one active run per task.</p>
+            </section>
+
+            <section class="workflow-decision-card">
+              <header>
+                <span>Finish gate</span>
+                <h3>How does this execution end?</h3>
+              </header>
+              <div class="workflow-outcome outcome-loop">
+                <strong>Pause → Release exact run</strong>
+                <p>Keep the owner and open task for a later execute, or unassign after every run stops.</p>
+              </div>
+              <div class="workflow-outcome outcome-yes">
+                <strong>Done → Archive + unlock</strong>
+                <p>Require terminal delivery, matching active run and concrete evidence.</p>
+              </div>
+              <div class="workflow-outcome outcome-stop">
+                <strong>Failed / cancelled keeps dependents blocked</strong>
+                <p>With active agents, the caller needs a matching run and the archive records every participant.</p>
+              </div>
+              <div class="workflow-outcome outcome-stop">
+                <strong>No active agents → Creator only</strong>
+                <p>The task creator may archive terminal failed or cancelled only without a run ID.</p>
+              </div>
+            </section>
+          </section>
+
+          <figcaption>
+            <code>check [TASK_ID]</code> is the read-only rail across every stage: it refreshes blockers,
+            owners, active-agent logins, delivery, reviews, checks and drift. Pages never writes back
+            to GitHub or Hub and never publishes run identifiers.
+          </figcaption>
+        </figure>
+
+        <div class="markdown-body workflow-notes">
 <!-- WUDITASK_WORKFLOW_CONTENT -->
+        </div>
       </article>
     </main>
 
     <footer>
       <span>WudiTask collaboration workflow</span>
-      <a href="workflow.md">View Markdown source</a>
+      <a href="workflow.md">View workflow notes</a>
     </footer>
   </body>
 </html>
