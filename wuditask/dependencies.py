@@ -3,7 +3,6 @@ from __future__ import annotations
 from typing import Any
 
 from .errors import WudiTaskError
-from .model import claim_identity
 from .repository import TaskIndex, TaskRecord
 
 
@@ -13,31 +12,12 @@ def completion_is_ready(task: dict[str, Any]) -> tuple[bool, str]:
         return False, "archived task has no completion record"
     if completion.get("outcome") != "done":
         return False, f"dependency outcome is {completion.get('outcome', 'unknown')}"
-    criterion_ids = {
-        criterion["id"]
-        for criterion in task.get("acceptance_criteria", [])
-        if isinstance(criterion, dict) and isinstance(criterion.get("id"), str)
-    }
-    results = completion.get("acceptance_results", [])
-    result_map = {
-        result.get("criterion_id"): result
-        for result in results
-        if isinstance(result, dict)
-    }
-    missing = sorted(criterion_ids - set(result_map))
-    if missing:
-        return False, f"missing acceptance evidence for {', '.join(missing)}"
-    for criterion_id in sorted(criterion_ids):
-        result = result_map[criterion_id]
-        if (
-            result.get("status") != "passed"
-            or not str(result.get("evidence", "")).strip()
-        ):
-            return (
-                False,
-                f"acceptance criterion {criterion_id} has not passed with evidence",
-            )
-    return True, "archived as done with passing evidence"
+    evidence = completion.get("evidence")
+    if not isinstance(evidence, list) or not evidence:
+        return False, "dependency has no completion evidence"
+    if not all(isinstance(item, str) and item.strip() for item in evidence):
+        return False, "dependency has invalid completion evidence"
+    return True, "archived as done with evidence"
 
 
 def _cycle_reachable(task_id: str, index: TaskIndex) -> list[str] | None:
@@ -78,15 +58,12 @@ def _expanded_dependency(dependency_id: str, index: TaskIndex) -> dict[str, Any]
             "reason": "dependency task does not exist",
         }
     task = record.task
-    complete = False
-    reason = "dependency is still open"
-    outcome = None
-    acceptance_results: list[dict[str, Any]] = []
-    if record.archived:
-        complete, reason = completion_is_ready(task)
-        completion = task.get("completion", {})
-        outcome = completion.get("outcome")
-        acceptance_results = completion.get("acceptance_results", [])
+    completion = task.get("completion") if record.archived else None
+    complete, reason = (
+        completion_is_ready(task)
+        if record.archived
+        else (False, "dependency is still open")
+    )
     return {
         "id": dependency_id,
         "exists": True,
@@ -94,12 +71,10 @@ def _expanded_dependency(dependency_id: str, index: TaskIndex) -> dict[str, Any]
         "complete": complete,
         "reason": reason,
         "repo": task["repo"],
-        "title": task["title"],
-        "goal": task["goal"],
-        "acceptance_criteria": task["acceptance_criteria"],
-        "outcome": outcome,
-        "acceptance_results": acceptance_results,
-        "claim_holder": claim_identity(task.get("claim")),
+        "source": task["source"],
+        "active_agents": task["active_agents"],
+        "outcome": completion.get("outcome") if isinstance(completion, dict) else None,
+        "evidence": completion.get("evidence", []) if isinstance(completion, dict) else [],
     }
 
 
@@ -111,10 +86,7 @@ def task_dependency_report(record: TaskRecord, index: TaskIndex) -> dict[str, An
     ]
     cycle = _cycle_reachable(task["id"], index)
     blockers = [
-        {
-            "id": dependency["id"],
-            "reason": dependency["reason"],
-        }
+        {"id": dependency["id"], "reason": dependency["reason"]}
         for dependency in dependencies
         if not dependency["complete"]
     ]
@@ -129,7 +101,7 @@ def task_dependency_report(record: TaskRecord, index: TaskIndex) -> dict[str, An
     if record.archived:
         ready, _ = completion_is_ready(task)
         state = task["completion"]["outcome"]
-    elif task.get("claim") is not None:
+    elif task["active_agents"]:
         state = "in_progress"
     elif ready:
         state = "ready"
@@ -138,11 +110,10 @@ def task_dependency_report(record: TaskRecord, index: TaskIndex) -> dict[str, An
     return {
         "id": task["id"],
         "repo": task["repo"],
-        "title": task["title"],
-        "goal": task["goal"],
+        "source": task["source"],
         "priority": task["priority"],
-        "claim_holder": claim_identity(task.get("claim")),
         "created_at": task["created_at"],
+        "active_agents": task["active_agents"],
         "ready": ready,
         "state": state,
         "cycle": cycle,
@@ -153,22 +124,8 @@ def task_dependency_report(record: TaskRecord, index: TaskIndex) -> dict[str, An
 
 def dependency_report(index: TaskIndex, task_id: str | None = None) -> dict[str, Any]:
     if task_id is not None:
-        record = index.open.get(task_id)
+        record = index.get(task_id)
         if record is None:
-            archived = index.archived.get(task_id)
-            if archived is not None:
-                complete, reason = completion_is_ready(archived.task)
-                return {
-                    "task": {
-                        "id": task_id,
-                        "repo": archived.task["repo"],
-                        "title": archived.task["title"],
-                        "state": "archived",
-                        "ready": complete,
-                        "outcome": archived.task["completion"]["outcome"],
-                        "reason": reason,
-                    }
-                }
             raise WudiTaskError(
                 "task_not_found",
                 f"Task {task_id} does not exist.",

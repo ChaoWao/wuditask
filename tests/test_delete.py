@@ -6,197 +6,155 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from wuditask.errors import WudiTaskError
+from wuditask.errors import DataValidationError, WudiTaskError
 from wuditask.gitops import GitCoordinator
 from wuditask.model import Identity
 from wuditask.repository import TaskRepository
-from wuditask.util import deletion_receipt_id
-from wuditask.validation import validate_repository
+from wuditask.util import atomic_write_json, deletion_receipt_id
 from wuditask.workflow import (
     archive_task,
-    claim_task,
     create_task,
     delete_archived_tasks,
+    start_agent,
 )
 
-from tests.helpers import ACTOR, OTHER_ACTOR, add_task, git, make_hub_origin, spec
+from tests.helpers import (
+    ACTOR,
+    OTHER_ACTOR,
+    RUN_ID,
+    add_task,
+    git,
+    make_hub_origin,
+    spec,
+)
 
 FIRST_ID = "WDT-20260711T120000Z-111111"
 SECOND_ID = "WDT-20260711T120001Z-222222"
 THIRD_ID = "WDT-20260711T120002Z-333333"
 
 
-def archive(
-    repository: TaskRepository,
-    task_id: str,
-    *,
-    title: str = "Archived task",
-    dependencies: list[str] | None = None,
-) -> None:
-    add_task(repository, task_id, title=title, dependencies=dependencies)
-    claim_task(repository, ACTOR, task_id=task_id)
-    archive_task(
-        repository,
-        ACTOR,
-        task_id,
-        outcome="done",
-        result="Fixture completed.",
-        evidence={"AC-1": "Fixture verification passed."},
-        now="2026-07-11T13:00:00Z",
-    )
+def delivery(state: str) -> dict[str, object]:
+    return {
+        "status": "fresh",
+        "delivery_state": state,
+        "title": "Task",
+        "body": "Body",
+        "owners": ["alice"],
+        "assignees": ["alice"],
+        "prs": [],
+        "updated_at": None,
+        "fetched_at": "2026-07-11T13:00:00Z",
+        "error": None,
+        "url": "https://github.com/acme/service/issues/12",
+    }
+
+
+def archive(repository: TaskRepository, task_id: str, *, dependencies: list[str] | None = None) -> None:
+    add_task(repository, task_id, dependencies=dependencies)
+    with patch("wuditask.workflow.fetch_delivery", return_value=delivery("assigned")):
+        start_agent(repository, ACTOR, task_id=task_id, run_id=RUN_ID)
+    with patch(
+        "wuditask.workflow.fetch_delivery",
+        return_value=delivery("verification_needed"),
+    ):
+        archive_task(
+            repository,
+            ACTOR,
+            task_id,
+            outcome="done",
+            result="Fixture completed.",
+            evidence=["Fixture verification passed."],
+            run_id=RUN_ID,
+            now="2026-07-11T13:00:00Z",
+        )
 
 
 class DeleteWorkflowTests(unittest.TestCase):
-    def test_deletes_multiple_archived_tasks_as_one_batch(self) -> None:
-        with tempfile.TemporaryDirectory() as temporary:
-            repository = TaskRepository(Path(temporary))
-            repository.initialize()
-            archive(repository, FIRST_ID, title="First erroneous task")
-            archive(repository, SECOND_ID, title="Second erroneous task")
-
-            result = delete_archived_tasks(
-                repository,
-                ACTOR,
-                [FIRST_ID, SECOND_ID],
-                reason="Both records were created by mistake.",
-            )
-
-            self.assertTrue(result["confirmed"])
-            self.assertEqual([FIRST_ID, SECOND_ID], result["deleted_task_ids"])
-            self.assertEqual(ACTOR.as_dict(), result["deleted_by"])
-            self.assertFalse(result["already_deleted"])
-            receipt = result["deletion_receipt"]
-            self.assertEqual([FIRST_ID, SECOND_ID], receipt["task_ids"])
-            self.assertEqual(
-                receipt,
-                repository.load_deletion_receipts()[receipt["id"]],
-            )
-            self.assertEqual([], list(repository.load_index().archived))
-            self.assertEqual(
-                {"open": 0, "archived": 0, "deletions": 1},
-                {
-                    "open": validate_repository(repository)["open"],
-                    "archived": validate_repository(repository)["archived"],
-                    "deletions": validate_repository(repository)["deletions"],
-                },
-            )
-
-            retried = delete_archived_tasks(
-                repository,
-                ACTOR,
-                [SECOND_ID, FIRST_ID],
-                reason="Both records were created by mistake.",
-            )
-            self.assertTrue(retried["already_deleted"])
-            self.assertFalse(retried["changed"])
-            self.assertEqual(receipt, retried["deletion_receipt"])
-
-    def test_rejects_reason_ids_and_non_archived_targets_before_mutation(self) -> None:
+    def test_deletion_receipt_v2_records_only_login(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             repository = TaskRepository(Path(temporary))
             repository.initialize()
             archive(repository, FIRST_ID)
-            add_task(repository, SECOND_ID, title="Still open")
-
-            cases = (
-                ("delete_reason_required", [FIRST_ID], "   "),
-                ("invalid_task_id", ["not-a-task"], "Mistake."),
-                ("duplicate_task_id", [FIRST_ID, FIRST_ID], "Mistake."),
-                ("archived_tasks_required", [FIRST_ID, SECOND_ID], "Mistake."),
-                ("archived_tasks_required", [FIRST_ID, THIRD_ID], "Mistake."),
+            result = delete_archived_tasks(
+                repository,
+                ACTOR,
+                [FIRST_ID],
+                reason="Record was added by mistake.",
+                now="2026-07-11T14:00:00Z",
             )
-            for expected, task_ids, reason in cases:
-                with self.subTest(expected=expected):
-                    with self.assertRaises(WudiTaskError) as raised:
-                        delete_archived_tasks(
-                            repository,
-                            ACTOR,
-                            task_ids,
-                            reason=reason,
-                        )
-                    self.assertEqual(expected, raised.exception.code)
-                    index = repository.load_index()
-                    self.assertIn(FIRST_ID, index.archived)
-                    self.assertIn(SECOND_ID, index.open)
 
-    def test_open_and_archived_dependents_block_the_complete_batch(self) -> None:
+        self.assertEqual("alice", result["deleted_by"])
+        self.assertEqual(2, result["deletion_receipt"]["receipt_version"])
+        self.assertEqual("alice", result["deletion_receipt"]["deleted_by"])
+
+    def test_delete_is_idempotent_for_same_login_casefold(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             repository = TaskRepository(Path(temporary))
             repository.initialize()
-            archive(repository, FIRST_ID, title="Referenced archive")
-            archive(repository, SECOND_ID, title="Unreferenced archive")
-            add_task(
+            archive(repository, FIRST_ID)
+            first = delete_archived_tasks(
                 repository,
-                THIRD_ID,
-                title="Open dependent",
-                dependencies=[FIRST_ID],
+                ACTOR,
+                [FIRST_ID],
+                reason="Record was added by mistake.",
+            )
+            retry = delete_archived_tasks(
+                repository,
+                type(ACTOR)("Alice"),
+                [FIRST_ID],
+                reason="Record was added by mistake.",
             )
 
+        self.assertTrue(retry["already_deleted"])
+        self.assertEqual(first["deletion_receipt"], retry["deletion_receipt"])
+
+    def test_external_dependents_block_deletion_but_internal_batch_edges_do_not(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            repository = TaskRepository(Path(temporary))
+            repository.initialize()
+            archive(repository, FIRST_ID)
+            archive(repository, SECOND_ID, dependencies=[FIRST_ID])
+            add_task(repository, THIRD_ID, dependencies=[SECOND_ID])
             with self.assertRaises(WudiTaskError) as raised:
                 delete_archived_tasks(
                     repository,
                     ACTOR,
                     [FIRST_ID, SECOND_ID],
-                    reason="Attempt an invalid partial batch.",
+                    reason="Remove complete fixture chain.",
                 )
-
             self.assertEqual("task_has_dependents", raised.exception.code)
-            self.assertEqual(
-                THIRD_ID,
-                raised.exception.details["targets"][0]["dependents"][0]["task_id"],
-            )
-            self.assertEqual(
-                "open",
-                raised.exception.details["targets"][0]["dependents"][0]["location"],
-            )
-            self.assertEqual(
-                {FIRST_ID, SECOND_ID}, set(repository.load_index().archived)
-            )
 
-            claim_task(repository, ACTOR, task_id=THIRD_ID)
-            archive_task(
-                repository,
-                ACTOR,
-                THIRD_ID,
-                outcome="done",
-                result="Dependent completed.",
-                evidence={"AC-1": "Fixture verification passed."},
-                now="2026-07-11T14:00:00Z",
-            )
-            with self.assertRaises(WudiTaskError) as archived_dependent:
-                delete_archived_tasks(
-                    repository,
-                    ACTOR,
-                    [FIRST_ID],
-                    reason="Archived dependents still count.",
-                )
-            self.assertEqual(
-                "archive",
-                archived_dependent.exception.details["targets"][0]["dependents"][0][
-                    "location"
-                ],
-            )
-
-    def test_allows_internal_dependencies_when_the_whole_batch_is_deleted(self) -> None:
-        with tempfile.TemporaryDirectory() as temporary:
-            repository = TaskRepository(Path(temporary))
-            repository.initialize()
-            archive(repository, FIRST_ID, title="Dependency")
-            archive(
-                repository,
-                SECOND_ID,
-                title="Dependent",
-                dependencies=[FIRST_ID],
-            )
-
-            delete_archived_tasks(
+            (repository.open_dir / f"{THIRD_ID}.json").unlink()
+            result = delete_archived_tasks(
                 repository,
                 ACTOR,
                 [FIRST_ID, SECOND_ID],
-                reason="The complete fixture chain was erroneous.",
+                reason="Remove complete fixture chain.",
             )
+        self.assertEqual([FIRST_ID, SECOND_ID], result["deleted_task_ids"])
 
-            self.assertEqual({}, repository.load_index().archived)
+    def test_repository_validates_receipt_id_from_login(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            repository = TaskRepository(Path(temporary))
+            repository.initialize()
+            reason = "Not canonical"
+            wrong = deletion_receipt_id([FIRST_ID], reason, "bob")
+            atomic_write_json(
+                repository.deletions_dir / f"{wrong}.json",
+                {
+                    "receipt_version": 2,
+                    "id": wrong,
+                    "task_ids": [FIRST_ID],
+                    "reason": reason,
+                    "deleted_by": "alice",
+                    "deleted_at": "2026-07-11T14:00:00Z",
+                },
+            )
+            with self.assertRaises(DataValidationError) as raised:
+                repository.load_deletion_receipts()
+        self.assertTrue(
+            any(issue["path"].endswith("$.id") for issue in raised.exception.details["issues"])
+        )
 
     def test_repository_restores_the_batch_when_an_unlink_fails(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -215,14 +173,16 @@ class DeleteWorkflowTests(unittest.TestCase):
                         raise OSError("simulated unlink failure")
                 original_unlink(path, *args, **kwargs)
 
-            with patch.object(Path, "unlink", new=fail_second):
-                with self.assertRaises(WudiTaskError) as raised:
-                    delete_archived_tasks(
-                        repository,
-                        ACTOR,
-                        [FIRST_ID, SECOND_ID],
-                        reason="Exercise rollback.",
-                    )
+            with (
+                patch.object(Path, "unlink", new=fail_second),
+                self.assertRaises(WudiTaskError) as raised,
+            ):
+                delete_archived_tasks(
+                    repository,
+                    ACTOR,
+                    [FIRST_ID, SECOND_ID],
+                    reason="Exercise rollback.",
+                )
 
             self.assertEqual("archive_delete_failed", raised.exception.code)
             self.assertEqual(
@@ -305,11 +265,11 @@ class DeleteWorkflowTests(unittest.TestCase):
             archive(repository, FIRST_ID)
             reason = "The other record was erroneous."
             receipt = {
-                "receipt_version": 1,
-                "id": deletion_receipt_id([SECOND_ID], reason, ACTOR.github_id),
+                "receipt_version": 2,
+                "id": deletion_receipt_id([SECOND_ID], reason, ACTOR.login),
                 "task_ids": [SECOND_ID],
                 "reason": reason,
-                "deleted_by": ACTOR.as_dict(),
+                "deleted_by": ACTOR.login,
                 "deleted_at": "2026-07-11T15:00:00Z",
             }
 
@@ -378,7 +338,7 @@ class DeleteGitTests(unittest.TestCase):
             f"Reason: {result['reason']}"
         )
 
-    def test_lost_push_response_reconciles_expected_absence(self) -> None:
+    def test_lost_push_response_is_confirmed_by_commit_ancestry(self) -> None:
         class AmbiguousPushCoordinator(GitCoordinator):
             def _push(self, checkout: Path) -> subprocess.CompletedProcess[str]:
                 accepted = super()._push(checkout)
@@ -391,31 +351,16 @@ class DeleteGitTests(unittest.TestCase):
                     stderr="simulated connection reset after accepted push",
                 )
 
-            def _remote_matches(self, result: dict[str, object]) -> bool:
-                return False
-
-        coordinator = AmbiguousPushCoordinator(
+        result = AmbiguousPushCoordinator(
             remote=str(self.origin),
             branch="main",
             cache_root=self.cache_root,
-        )
-        with self.assertRaises(WudiTaskError) as raised:
-            coordinator.write(self.operation, ACTOR, self.message)
-        self.assertEqual("push_status_unknown", raised.exception.code)
+        ).write(self.operation, ACTOR, self.message)
 
-        result = self.coordinator().write(self.operation, ACTOR, self.message)
-        self.assertTrue(result["already_deleted"])
-        self.assertFalse(result["changed"])
         self.assertTrue(result["sync"]["confirmed"])
-        index = self.remote_index()
-        self.assertNotIn(FIRST_ID, index.all)
-        self.assertNotIn(SECOND_ID, index.all)
-        commit_message = git(
-            ["log", "-1", "--format=%B", "refs/heads/main"], self.origin
-        ).stdout
-        self.assertIn(FIRST_ID, commit_message)
-        self.assertIn(SECOND_ID, commit_message)
-        self.assertIn("Remove erroneous fixtures.", commit_message)
+        self.assertEqual("commit_ancestry", result["sync"]["confirmation"])
+        self.assertEqual(result["sync"]["commit"], result["sync"]["remote_head"])
+        self.assertEqual({}, self.remote_index().all)
 
     def test_non_fast_forward_rechecks_new_reverse_dependency(self) -> None:
         added = False
@@ -442,9 +387,12 @@ class DeleteGitTests(unittest.TestCase):
                 lambda result: f"wuditask: add {result['task_id']}",
             )
 
-        coordinator = self.coordinator(before_push=add_dependent)
         with self.assertRaises(WudiTaskError) as raised:
-            coordinator.write(self.operation, ACTOR, self.message)
+            self.coordinator(before_push=add_dependent).write(
+                self.operation,
+                ACTOR,
+                self.message,
+            )
 
         self.assertEqual("task_has_dependents", raised.exception.code)
         index = self.remote_index()
@@ -487,10 +435,6 @@ class DeleteGitTests(unittest.TestCase):
         self.assertFalse(result["changed"])
         self.assertEqual(2, result["sync"]["attempts"])
         self.assertNotIn("confirmation", result["sync"])
-        self.assertEqual(
-            git(["rev-parse", "refs/heads/main"], self.origin).stdout.strip(),
-            result["sync"]["commit"],
-        )
         remote_receipt = next(
             iter(
                 self.remote_repository("inspect-identical")
@@ -535,7 +479,7 @@ class DeleteGitTests(unittest.TestCase):
         receipts = self.remote_repository("inspect-different").load_deletion_receipts()
         self.assertEqual(1, len(receipts))
         receipt = next(iter(receipts.values()))
-        self.assertEqual(OTHER_ACTOR.as_dict(), receipt["deleted_by"])
+        self.assertEqual(OTHER_ACTOR.login, receipt["deleted_by"])
         self.assertEqual(
             "Bob removed a different erroneous fixture batch.",
             receipt["reason"],

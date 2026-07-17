@@ -8,150 +8,151 @@ from wuditask.errors import WudiTaskError
 from wuditask.model import validate_task
 from wuditask.workflow import create_task
 
-from tests.helpers import ACTOR, add_task, make_repository, spec
+from tests.helpers import ACTOR, RUN_ID, add_task, make_repository, spec
 
 TASK_ID = "WDT-20260711T120000Z-A1B2C3"
 
 
 class ModelTests(unittest.TestCase):
-    def test_created_task_matches_schema_contract(self) -> None:
+    def test_created_task_has_only_schema_three_coordination_fields(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
-            repository = make_repository(Path(temporary))
-            task = add_task(repository, TASK_ID)
+            task = add_task(make_repository(Path(temporary)), TASK_ID)
 
         self.assertEqual([], validate_task(task, archived=False))
-        self.assertIsNone(task["claim"])
-        self.assertNotIn("owner", task)
-        self.assertEqual("text", task["source"]["kind"])
-        self.assertNotIn("status", task)
-        self.assertEqual({"login": "alice", "github_id": 1001}, task["created_by"])
+        self.assertEqual(
+            {
+                "schema_version",
+                "id",
+                "repo",
+                "source",
+                "created_by",
+                "priority",
+                "created_at",
+                "dependencies",
+                "active_agents",
+            },
+            set(task),
+        )
+        self.assertEqual(3, task["schema_version"])
+        self.assertEqual("alice", task["created_by"])
+        self.assertEqual([], task["active_agents"])
 
-    def test_add_reports_questions_for_insufficient_spec(self) -> None:
+    def test_add_requires_only_repo_and_github_source(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             repository = make_repository(Path(temporary))
             with self.assertRaises(WudiTaskError) as raised:
-                create_task(
-                    repository,
-                    {"title": "Incomplete"},
-                    ACTOR,
-                    task_id=TASK_ID,
-                    now="2026-07-11T12:00:00Z",
-                )
+                create_task(repository, {}, ACTOR, task_id=TASK_ID)
 
         self.assertEqual("insufficient_task_spec", raised.exception.code)
-        self.assertEqual(
-            ["repo", "goal", "source", "acceptance_criteria"],
-            raised.exception.details["missing"],
-        )
-        self.assertEqual(4, len(raised.exception.details["questions"]))
+        self.assertEqual(["repo", "source"], raised.exception.details["missing"])
 
-    def test_github_source_outside_execution_repo_requires_reason(self) -> None:
+    def test_text_source_is_rejected(self) -> None:
         value = spec()
-        value["source"] = {
-            "kind": "github_issue_fallback",
-            "repo": "acme/wuditask-hub",
-            "number": 42,
-        }
+        value["source"] = {"kind": "text", "reason": "not canonical"}
         with tempfile.TemporaryDirectory() as temporary:
-            repository = make_repository(Path(temporary))
             with self.assertRaises(Exception) as raised:
                 create_task(
-                    repository,
+                    make_repository(Path(temporary)),
                     value,
                     ACTOR,
                     task_id=TASK_ID,
                     now="2026-07-11T12:00:00Z",
                 )
         self.assertTrue(
-            any(
-                issue["path"] == "$.source.fallback_reason"
-                for issue in raised.exception.details["issues"]
-            )
+            any(issue["path"] == "$.source.kind" for issue in raised.exception.details["issues"])
         )
 
-    def test_github_source_outside_execution_repo_accepts_reason(self) -> None:
-        value = spec()
-        value["source"] = {
-            "kind": "github_issue_fallback",
-            "repo": "acme/wuditask-hub",
-            "number": 42,
-            "fallback_reason": "The execution repository has Issues disabled.",
-        }
+    def test_active_agents_require_unique_case_insensitive_login_and_run_id(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
-            repository = make_repository(Path(temporary))
-            task = create_task(
-                repository,
-                value,
-                ACTOR,
-                task_id=TASK_ID,
-                now="2026-07-11T12:00:00Z",
-            )["task"]
-        self.assertEqual("acme/wuditask-hub", task["source"]["repo"])
-
-    def test_unknown_fields_are_rejected(self) -> None:
-        with tempfile.TemporaryDirectory() as temporary:
-            repository = make_repository(Path(temporary))
-            task = add_task(repository, TASK_ID)
-        task["agent_owner"] = "some-agent"
+            task = add_task(make_repository(Path(temporary)), TASK_ID)
+        task["active_agents"] = [
+            {"login": "Alice", "run_id": RUN_ID},
+            {"login": "alice", "run_id": "not-a-run"},
+        ]
         issues = validate_task(task, archived=False)
         self.assertIn(
-            {"path": "$.agent_owner", "message": "is not allowed"},
+            {"path": "$.active_agents[1].login", "message": "must be unique ignoring case"},
+            issues,
+        )
+        self.assertIn(
+            {"path": "$.active_agents[1].run_id", "message": "must match WDX- followed by 24 hexadecimal characters"},
             issues,
         )
 
-    def test_dependency_must_exist_when_added(self) -> None:
+    def test_done_completion_requires_evidence_and_snapshots_participants(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
-            repository = make_repository(Path(temporary))
-            value = spec(dependencies=["WDT-20260710T120000Z-FFFFFF"])
-            with self.assertRaises(WudiTaskError) as raised:
-                create_task(
-                    repository,
-                    value,
-                    ACTOR,
-                    task_id=TASK_ID,
-                    now="2026-07-11T12:00:00Z",
-                )
-        self.assertEqual("missing_dependency", raised.exception.code)
-
-    def test_add_with_same_explicit_id_and_spec_is_idempotent(self) -> None:
-        with tempfile.TemporaryDirectory() as temporary:
-            repository = make_repository(Path(temporary))
-            first = create_task(
-                repository,
-                spec(),
-                ACTOR,
-                task_id=TASK_ID,
-                now="2026-07-11T12:00:00Z",
-            )
-            second = create_task(
-                repository,
-                spec(),
-                ACTOR,
-                task_id=TASK_ID,
-                now="2026-07-11T12:00:00Z",
-            )
-        self.assertTrue(first["changed"])
-        self.assertFalse(second["changed"])
-        self.assertTrue(second["already_added"])
-
-    def test_incomplete_acceptance_returns_questions(self) -> None:
-        value = spec()
-        value["acceptance_criteria"] = [{"description": "", "verification": {}}]
-        with tempfile.TemporaryDirectory() as temporary:
-            repository = make_repository(Path(temporary))
-            with self.assertRaises(WudiTaskError) as raised:
-                create_task(
-                    repository,
-                    value,
-                    ACTOR,
-                    task_id=TASK_ID,
-                    now="2026-07-11T12:00:00Z",
-                )
-        self.assertEqual("insufficient_task_spec", raised.exception.code)
+            task = add_task(make_repository(Path(temporary)), TASK_ID)
+        task["completion"] = {
+            "outcome": "done",
+            "completed_at": "2026-07-11T13:00:00Z",
+            "completed_by": "alice",
+            "result": "Done.",
+            "evidence": [],
+            "participants": [{"login": "alice", "run_id": RUN_ID}],
+        }
+        issues = validate_task(task, archived=True)
         self.assertIn(
-            "acceptance_criteria[0].verification",
-            raised.exception.details["missing"],
+            {"path": "$.completion.evidence", "message": "must be non-empty when outcome is done"},
+            issues,
         )
+
+    def test_archived_task_has_no_active_agents_and_completer_is_a_participant(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            task = add_task(make_repository(Path(temporary)), TASK_ID)
+        task["active_agents"] = [{"login": "alice", "run_id": RUN_ID}]
+        task["completion"] = {
+            "outcome": "failed",
+            "completed_at": "2026-07-11T13:00:00Z",
+            "completed_by": "bob",
+            "result": "Failed.",
+            "evidence": [],
+            "participants": [{"login": "alice", "run_id": RUN_ID}],
+        }
+        issues = validate_task(task, archived=True)
+        self.assertIn(
+            {"path": "$.active_agents", "message": "must be empty in an archived task"},
+            issues,
+        )
+        self.assertIn(
+            {"path": "$.completion.completed_by", "message": "must identify a participant"},
+            issues,
+        )
+
+    def test_unclaimed_terminal_completion_may_be_recorded_by_creator(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            task = add_task(make_repository(Path(temporary)), TASK_ID)
+        task["completion"] = {
+            "outcome": "cancelled",
+            "completed_at": "2026-07-11T13:00:00Z",
+            "completed_by": "alice",
+            "result": "No longer planned.",
+            "evidence": [],
+            "participants": [],
+        }
+        self.assertEqual([], validate_task(task, archived=True))
+
+        task["completion"]["completed_by"] = "bob"
+        self.assertIn(
+            {
+                "path": "$.completion.completed_by",
+                "message": "must identify a participant or the task creator for a non-done outcome",
+            },
+            validate_task(task, archived=True),
+        )
+
+    def test_github_fallback_requires_external_repo_and_reason(self) -> None:
+        value = spec()
+        value["source"] = {
+            "kind": "github_issue_fallback",
+            "repo": "acme/hub",
+            "number": 42,
+            "fallback_reason": "Execution repository has Issues disabled.",
+        }
+        with tempfile.TemporaryDirectory() as temporary:
+            task = create_task(
+                make_repository(Path(temporary)), value, ACTOR, task_id=TASK_ID
+            )["task"]
+        self.assertEqual("github_issue_fallback", task["source"]["kind"])
 
 
 if __name__ == "__main__":

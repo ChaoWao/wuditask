@@ -1,15 +1,16 @@
 ---
 name: wuditask-show
-description: Show one WudiTask with separate coordination and live GitHub delivery state. Use for its execution repo, canonical source, goal, claim, dependencies, acceptance, or completion details.
+description: Show one WudiTask with its canonical GitHub source, live owners and delivery, Hub dependencies and active agent runs, or archived completion. Use for a detailed read-only task inspection.
 ---
 
 # Show a WudiTask
 
-Use only the registered WudiTask CLI's read-only `show` command.
+Use only the registered CLI's read-only `show` command.
 
 ## Locate the CLI
 
-Read `~/.wuditask/config.json`, take its absolute `tool_path`, and invoke `python3 <tool_path>/tools/wuditask.py --json ...`. The CLI reads the task Hub remote and branch from the same config. If registration is missing or stale, ask the user to invoke `$wuditask-install` or `/wuditask-install`.
+Read `~/.wuditask/config.json`, take its absolute `tool_path`, and invoke
+`python3 <tool_path>/tools/wuditask.py --json ...`.
 
 ## Show one task
 
@@ -17,8 +18,12 @@ Read `~/.wuditask/config.json`, take its absolute `tool_path`, and invoke `pytho
 python3 <tool_path>/tools/wuditask.py --json show TASK_ID
 ```
 
-Present the relevant task fields exactly. Distinguish the WudiTask execution
-claim from GitHub assignees and closing-PR authors. The structured `source` is
-canonical; `links` are supporting references.
+Present the canonical Issue or pull-request title, body/acceptance contract,
+owners and delivery together with the Hub's execution repository, priority,
+dependencies, active `login`/`run_id` entries, and completion when archived.
+Do not describe an owner as active unless that login has an active-agent entry,
+and do not describe an active agent as a GitHub assignee unless delivery says
+so.
 
-Do not use a mutating command for inspection. Use `$wuditask-list` or `/wuditask-list` for queue-wide queries, and `$wuditask-dep-check` or `/wuditask-dep-check` for expanded blocker analysis.
+Use `$wuditask-list` for queue-wide queries and `$wuditask-check` for expanded
+blockers and consistency observations. Do not mutate during inspection.

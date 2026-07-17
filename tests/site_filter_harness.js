@@ -59,51 +59,86 @@ class FakeElement {
 
 function openTask(repo, state) {
   return {
+    schema_version: 3,
     id: "WDT-OPEN",
-    title: "Open task",
     repo: repo,
-    goal: "Exercise open filters.",
     priority: "P1",
-    source: { kind: "text", reason: "test" },
-    claim: null,
-    context: [],
-    acceptance_criteria: [],
-    links: [],
-    derived: { state: state, claim_holder: null, dependencies: [] },
+    source: { kind: "github_issue", repo: repo, number: 17 },
+    created_by: "creator",
+    created_at: "2026-07-16T00:00:00Z",
+    dependencies: ["WDT-DEPENDENCY"],
+    active_agents: [{ login: "runner" }],
+    derived: {
+      state: state,
+      dependencies: [
+        {
+          id: "WDT-DEPENDENCY",
+          exists: true,
+          location: "archive",
+          complete: true,
+          reason: "archived as done with evidence",
+          repo: "shared/base",
+          source: { kind: "github_issue", repo: "shared/base", number: 3 },
+          active_agents: [],
+          outcome: "done",
+          evidence: ["Dependency CI passed"]
+        }
+      ]
+    },
     delivery: {
       status: "fresh",
-      delivery_state: "text_only",
-      assignees: [],
-      prs: []
+      delivery_state: "review",
+      title: "Canonical open task",
+      body: "Acceptance lives in the canonical Issue.",
+      url: "https://github.com/" + repo + "/issues/17",
+      owners: ["alice", "bob"],
+      prs: [
+        {
+          repo: repo,
+          number: 18,
+          url: "https://github.com/" + repo + "/pull/18",
+          state: "OPEN",
+          author: "alice",
+          title: "Linked implementation",
+          review_decision: "REVIEW_REQUIRED",
+          checks: { successful: 2, total: 3, pending: 1, failed: 0 }
+        }
+      ]
     }
   };
 }
 
 function archivedTask(repo, outcome) {
   return {
+    schema_version: 3,
     id: "WDT-ARCHIVE",
-    title: "Archived task",
     repo: repo,
-    goal: "Exercise archive filters.",
     priority: "P2",
-    source: { kind: "text", reason: "test" },
-    claim: null,
-    context: [],
-    acceptance_criteria: [],
-    links: [],
-    derived: { state: outcome, claim_holder: null, dependencies: [] },
+    source: { kind: "github_pull_request", repo: repo, number: 21 },
+    created_by: "creator",
+    created_at: "2026-07-15T00:00:00Z",
+    dependencies: [],
+    active_agents: [],
+    derived: { state: outcome, dependencies: [] },
     delivery: {
       status: "fresh",
-      delivery_state: "text_only",
-      assignees: [],
+      delivery_state: "ready_to_merge",
+      title: "Canonical archived task",
+      body: "The pull request is the task itself.",
+      url: "https://github.com/" + repo + "/pull/21",
+      owners: ["carol"],
       prs: []
     },
     completion: {
       outcome: outcome,
       result: "Complete.",
       completed_at: "2026-07-16T00:00:00Z",
-      completed_by: { login: "alice" },
-      acceptance_results: []
+      completed_by: "carol",
+      evidence: ["CI run 123 passed", "Reviewed by maintainer"],
+      participants: [
+        { login: "carol" },
+        { login: "dave" }
+      ]
     }
   };
 }
@@ -129,6 +164,24 @@ function optionValues(control) {
   return control.children.map(function (option) {
     return option.value;
   });
+}
+
+function descendants(root) {
+  const result = [];
+  function visit(node) {
+    result.push(node);
+    node.children.forEach(visit);
+  }
+  root.children.forEach(visit);
+  return result;
+}
+
+function renderedText(root) {
+  return descendants(root)
+    .map(function (node) {
+      return node.textContent || "";
+    })
+    .join(" ");
 }
 
 async function settle() {
@@ -217,12 +270,46 @@ async function main() {
 
   assert.deepEqual(optionValues(elements["repo-filter"]), ["", "open/repo"]);
   assert.deepEqual(optionValues(elements["state-filter"]), ["", "ready"]);
-  assert.deepEqual(optionValues(elements["delivery-filter"]), ["", "text_only"]);
+  assert.deepEqual(optionValues(elements["delivery-filter"]), ["", "review"]);
+  assert.match(renderedText(elements["task-list"]), /Canonical open task/);
+  assert.match(renderedText(elements["task-list"]), /alice, bob/);
+  assert.match(renderedText(elements["task-list"]), /runner/);
+  assert.match(renderedText(elements["task-list"]), /Acceptance lives in the canonical Issue/);
+  assert.match(renderedText(elements["task-list"]), /WDT-DEPENDENCY/);
+  assert.match(renderedText(elements["task-list"]), /archived as done with evidence/);
+  assert.doesNotMatch(renderedText(elements["task-list"]), /WDX-111/);
+  assert.ok(
+    descendants(elements["task-list"]).some(function (node) {
+      return node.href === "https://github.com/open/repo/issues/17";
+    })
+  );
+  elements.search.value = "alice";
+  elements.search.listeners.input();
+  assert.equal(elements["task-list"].children.length, 1);
+  elements.search.value = "acceptance lives";
+  elements.search.listeners.input();
+  assert.equal(elements["task-list"].children.length, 1);
+  elements.search.value = "not present";
+  elements.search.listeners.input();
+  assert.equal(elements["task-list"].children.length, 0);
+  elements.search.value = "";
+  elements.search.listeners.input();
 
   archiveButton.listeners.click();
   assert.deepEqual(optionValues(elements["repo-filter"]), ["", "archive/repo"]);
   assert.deepEqual(optionValues(elements["state-filter"]), ["", "done"]);
-  assert.deepEqual(optionValues(elements["delivery-filter"]), ["", "text_only"]);
+  assert.deepEqual(optionValues(elements["delivery-filter"]), ["", "ready_to_merge"]);
+  assert.match(renderedText(elements["task-list"]), /CI run 123 passed/);
+  assert.match(renderedText(elements["task-list"]), /carol, dave/);
+  assert.doesNotMatch(renderedText(elements["task-list"]), /WDX-222/);
+  elements.search.value = "reviewed by maintainer";
+  elements.search.listeners.input();
+  assert.equal(elements["task-list"].children.length, 1);
+  elements.search.value = "dave";
+  elements.search.listeners.input();
+  assert.equal(elements["task-list"].children.length, 1);
+  elements.search.value = "";
+  elements.search.listeners.input();
 
   openButton.listeners.click();
   elements["repo-filter"].value = "open/repo";
@@ -235,6 +322,16 @@ async function main() {
   assert.equal(elements["repo-filter"].value, "");
   assert.deepEqual(optionValues(elements["state-filter"]), ["", "blocked"]);
   assert.equal(elements["state-filter"].value, "");
+
+  currentSnapshot = snapshot("unknown/repo", "ready");
+  currentSnapshot.open_tasks[0].delivery.status = "unavailable";
+  currentSnapshot.open_tasks[0].delivery.delivery_state = "unavailable";
+  currentSnapshot.open_tasks[0].delivery.owners = null;
+  currentSnapshot.open_tasks[0].delivery.error = "GitHub API unavailable";
+  elements.refresh.listeners.click();
+  await settle();
+  assert.match(renderedText(elements["task-list"]), /Unknown/);
+  assert.doesNotMatch(renderedText(elements["task-list"]), /Unassigned/);
 }
 
 main().catch(function (error) {

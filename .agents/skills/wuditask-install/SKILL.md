@@ -1,23 +1,22 @@
 ---
 name: wuditask-install
-description: Register the complete WudiTask skill suite and CLI symlinks from a cloned tool repository, together with a separate task Hub remote. Use when a user asks to install, set up, register, relocate, repair, or reconcile WudiTask access, or when any WudiTask skill reports missing or stale configuration or links.
+description: Register the complete WudiTask skill suite and CLI symlinks from a cloned tool repository with a separate task Hub remote. Use to install, set up, relocate, repair, or reconcile WudiTask access and stale skill links.
 ---
 
 # Install WudiTask
 
-Register the tool clone by running its own Python installer. Do not pip/npm install anything and do not copy skill files manually.
+Register the tool clone through its Python installer. Do not pip/npm install it
+and do not copy skill files manually.
 
 ## Resolve the tool and Hub
 
-1. Prefer the current Git repository root when it contains `tools/wuditask.py` and `.agents/skills/`.
-2. Otherwise resolve this SKILL.md's real path and walk upward to the directory containing `tools/wuditask.py`.
-3. For repair after a move, use the new clone path supplied by the user.
-4. Refuse a directory that lacks the tool, lacks a required WudiTask skill, or contains an unexpected skill.
-5. Obtain the task Hub Git remote and branch. The Hub must be a separate repository containing a compatible `hub.json`; do not use the tool repository remote as the Hub.
+1. Use a Git repository root containing `tools/wuditask.py` and
+   `.agents/skills/`.
+2. Obtain the separate task Hub remote and branch; never use the tool origin as
+   the Hub.
+3. Refuse a clone missing a required skill or containing an unexpected one.
 
 ## Register
-
-Run:
 
 ```bash
 python3 TOOL/tools/wuditask.py --json install \
@@ -25,29 +24,33 @@ python3 TOOL/tools/wuditask.py --json install \
   --hub-branch main
 ```
 
-Confirm the JSON reports:
+Confirm the result reports:
 
-- `~/.wuditask/config.json` schema v2 with `tool_path`, `tool_remote`, `tool_branch`, `hub_remote`, and `hub_branch`;
-- `hub_cache` under `$XDG_CACHE_HOME/wuditask` or `~/.cache/wuditask`, pointing to the persistent bare cache selected by the Hub remote and branch;
-- the complete reported skill suite linked under both `~/.agents/skills` and `~/.claude/skills`;
-- `~/.local/bin/wuditask` linked to the repository's Python entry point.
+- `~/.wuditask/config.json` schema v2 with `tool_path`, tool remote/branch, and
+  the separate Hub remote/branch;
+- a persistent bare `hub_cache` under `$XDG_CACHE_HOME/wuditask` or
+  `~/.cache/wuditask`;
+- exactly twelve skills linked under both `~/.agents/skills` and
+  `~/.claude/skills`: add, archive, assign, check, delete, execute, install,
+  list, release, selfupdate, show, and unassign;
+- `~/.local/bin/wuditask` linked to the repository entry point.
 
-These are symbolic links, not copied files. Prefer `/wuditask-selfupdate` or `$wuditask-selfupdate` for verified future updates. Existing skill content updates immediately through the symlinks. After a non-check self-update reports `reinstall_required=true`, run this installer once without `--replace` to reconcile the suite. It removes a stale skill link only when that symlink still targets this clone; it never deletes unrelated skills or regular files. Also reinstall when the clone moves, is replaced at another path, or a link is damaged. If a long-running agent session has cached old instructions, reopen the session afterward.
+Links are symbolic. After selfupdate reports `reinstall_required=true`, rerun
+install once without `--replace`; this installs new links and removes only
+stale WudiTask links still targeting the registered clone. It must remove the
+retired dep-check/reconcile links without touching unrelated skills or files.
 
-If `launcher_on_path` is false, mention the launcher path; agents can still call the absolute Python entry point from config.
+If installation returns `install_path_exists`, inspect the conflict. Use
+`--replace` only with explicit user approval; existing content is preserved as
+a timestamped backup. Mention the launcher path when it is not on `PATH`.
 
-If installation returns `install_path_exists`, inspect and tell the user which destination conflicts. Do not use `--replace` until the user explicitly approves. When approved, rerun with `--replace`; the installer renames existing content to a timestamped backup.
-
-The installer initializes or refreshes the persistent bare Hub cache and
-validates an isolated operation worktree before changing links or config. It
-registers the complete eleven-skill suite, including reconciliation and guarded
-archived-record deletion. A validation failure may leave reusable Git objects
-in this disposable cache, but it must not create config, skill links, or the
-launcher. After a successful install, run a remote validation once more through
-the registered CLI:
+The installer validates an isolated operation worktree for the Hub before
+changing local registration. After success, run:
 
 ```bash
 python3 TOOL/tools/wuditask.py --json validate
 ```
 
-Report the registered tool path, Hub remote and branch, bare cache path, and validation result. Rerun this skill whenever the tool clone moves or the Hub remote changes.
+Report tool path, Hub remote/branch, bare cache, twelve-skill inventory, and
+validation result. Reopen long-running agent sessions that cached retired
+skills.

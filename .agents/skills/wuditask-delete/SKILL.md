@@ -16,7 +16,7 @@ be deleted; normal outcomes remain archived.
 
 Record a concrete reason explaining why the records themselves are erroneous.
 The current Hub tree keeps a durable receipt under `data/deletions/` with the
-exact sorted batch IDs, reason, verified GitHub identity, and UTC timestamp.
+exact sorted batch IDs, reason, verified GitHub login, and UTC timestamp.
 Those task IDs are permanently reserved and cannot be recreated. The receipt
 and original records remain in Git history; published Pages artifacts, clones,
 and GitHub Issue/PR history are not erased, so never present this operation as
@@ -41,9 +41,9 @@ record should also be deleted or changed through its proper workflow.
 The CLI does not close, reopen, assign, or otherwise mutate any canonical
 GitHub source. Remote deletion uses one ordinary non-force Hub push and replays
 all guards after concurrent changes. Its deterministic receipt ID is derived
-from the sorted IDs, trimmed reason, and the actor's immutable GitHub numeric
-ID. A different actor or reason is a different operation and cannot confirm
-this request.
+from the sorted IDs, trimmed reason, and authenticated GitHub login. A
+different actor or reason is a different operation and cannot confirm this
+request.
 
 Delete requires the configured remote Hub. Never add `--local`: local files do
 not provide a crash-safe multi-record commit boundary, so the CLI rejects that

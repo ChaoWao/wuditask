@@ -1,4 +1,0 @@
-interface:
-  display_name: "Reconcile WudiTask"
-  short_description: "Compare WudiTask coordination with GitHub delivery"
-  default_prompt: "Use $wuditask-reconcile to compare queue and GitHub state without mutation."

@@ -48,39 +48,75 @@ class FakeElement {
 
 function issueTask(id, repo, number, dependencies) {
   return {
+    schema_version: 3,
     id: id,
-    title: "Issue work " + number,
     repo: repo,
     source: { kind: "github_issue", repo: repo, number: number },
+    created_by: "creator",
+    priority: "P1",
     dependencies: dependencies || [],
+    active_agents: [],
     created_at: "2026-07-16T00:00:00Z",
-    derived: { state: "ready", dependencies: [] }
+    derived: { state: "ready", dependencies: [] },
+    delivery: {
+      status: "fresh",
+      delivery_state: "unstarted",
+      title: "Issue work " + number,
+      body: "Canonical Issue body",
+      url: "https://github.com/" + repo + "/issues/" + number,
+      owners: [],
+      prs: []
+    }
   };
 }
 
 function snapshot() {
   const issue = issueTask("WDT-20260716T000000Z-AAAAAA", "acme/alpha", 12);
   const text = {
+    schema_version: 3,
     id: "WDT-20260716T000001Z-BBBBBB",
-    title: "Internal text task",
     repo: "acme/alpha",
-    source: { kind: "text", reason: "No owning issue" },
+    source: { kind: "github_issue", repo: "acme/alpha", number: 13 },
+    created_by: "creator",
+    priority: "P2",
     dependencies: [issue.id],
+    active_agents: [],
     created_at: "2026-07-16T00:00:01Z",
-    derived: { state: "blocked", dependencies: [] }
+    derived: { state: "blocked", dependencies: [] },
+    delivery: {
+      status: "fresh",
+      delivery_state: "unstarted",
+      title: "Second Issue task",
+      body: "Canonical Issue body",
+      url: "https://github.com/acme/alpha/issues/13",
+      owners: [],
+      prs: []
+    }
   };
   const pullRequest = {
+    schema_version: 3,
     id: "WDT-20260716T000002Z-CCCCCC",
-    title: "Cross-repository delivery",
     repo: "acme/beta",
     source: { kind: "github_pull_request", repo: "acme/beta", number: 7 },
+    created_by: "creator",
+    priority: "P2",
     dependencies: [issue.id],
+    active_agents: [],
     created_at: "2026-07-16T00:00:02Z",
-    derived: { state: "blocked", dependencies: [] }
+    derived: { state: "blocked", dependencies: [] },
+    delivery: {
+      status: "fresh",
+      delivery_state: "review",
+      title: "Cross-repository delivery",
+      body: "Canonical PR body",
+      url: "https://github.com/acme/beta/pull/7",
+      owners: ["author"],
+      prs: []
+    }
   };
   const fallback = {
+    schema_version: 3,
     id: "WDT-20260716T000003Z-DDDDDD",
-    title: "Hub fallback item",
     repo: "acme/beta",
     source: {
       kind: "github_issue_fallback",
@@ -88,28 +124,71 @@ function snapshot() {
       number: 99,
       fallback_reason: "No owning repository"
     },
+    created_by: "creator",
+    priority: "P3",
     dependencies: [],
+    active_agents: [],
     created_at: "2026-07-16T00:00:03Z",
     derived: { state: "done", dependencies: [] },
-    completion: { outcome: "done" }
+    delivery: {
+      status: "fresh",
+      delivery_state: "verification_needed",
+      title: "Hub fallback item",
+      body: "Fallback Issue body",
+      url: "https://github.com/acme/task-hub/issues/99",
+      owners: [],
+      prs: []
+    },
+    completion: {
+      outcome: "done",
+      completed_at: "2026-07-16T00:01:00Z",
+      completed_by: "creator",
+      result: "Done",
+      evidence: ["Verified"],
+      participants: []
+    }
   };
   const cycleFirst = {
+    schema_version: 3,
     id: "WDT-20260716T000004Z-EEEEEE",
-    title: "Cycle first",
     repo: "acme/beta",
-    source: { kind: "text", reason: "Cycle fixture" },
+    source: { kind: "github_issue", repo: "acme/beta", number: 43 },
+    created_by: "creator",
+    priority: "P3",
     dependencies: ["WDT-20260716T000005Z-FFFFFF"],
+    active_agents: [],
     created_at: "2026-07-16T00:00:04Z",
-    derived: { state: "blocked", dependencies: [] }
+    derived: { state: "blocked", dependencies: [] },
+    delivery: {
+      status: "fresh",
+      delivery_state: "unstarted",
+      title: "Cycle first",
+      body: "Cycle fixture",
+      url: "https://github.com/acme/beta/issues/43",
+      owners: [],
+      prs: []
+    }
   };
   const cycleSecond = {
+    schema_version: 3,
     id: "WDT-20260716T000005Z-FFFFFF",
-    title: "Cycle second",
     repo: "acme/beta",
     source: { kind: "github_issue", repo: "acme/beta", number: 44 },
+    created_by: "creator",
+    priority: "P3",
     dependencies: [cycleFirst.id],
+    active_agents: [],
     created_at: "2026-07-16T00:00:05Z",
-    derived: { state: "blocked", dependencies: [] }
+    derived: { state: "blocked", dependencies: [] },
+    delivery: {
+      status: "fresh",
+      delivery_state: "unstarted",
+      title: "Cycle second",
+      body: "Cycle fixture",
+      url: "https://github.com/acme/beta/issues/44",
+      owners: [],
+      prs: []
+    }
   };
   return {
     generated_at: "2026-07-16T01:00:00Z",
@@ -238,8 +317,20 @@ async function main() {
   });
   assert.equal(labels[issueId], "Issue #12");
   assert.equal(labels[prId], "PR #7");
-  assert.equal(labels[textId], textId);
+  assert.equal(labels[textId], "Issue #13");
   assert.equal(labels["WDT-20260716T000003Z-DDDDDD"], "Issue #99");
+  assert.match(
+    renderedNodes(elements["dag-graph"]).find(function (node) {
+      return node.attributes["data-task-id"] === prId;
+    }).attributes["aria-label"],
+    /Cross-repository delivery/
+  );
+  assert.equal(
+    renderedNodes(elements["dag-graph"]).find(function (node) {
+      return node.attributes["data-task-id"] === prId;
+    }).attributes.href,
+    "https://github.com/acme/beta/pull/7"
+  );
   assert.notEqual(colors["acme/alpha"], colors["acme/beta"]);
   assert.match(
     elements["dag-summary"].textContent,

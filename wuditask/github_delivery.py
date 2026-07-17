@@ -9,10 +9,10 @@ from urllib.parse import urlparse
 
 
 ISSUE_FIELDS = (
-    "url,state,stateReason,assignees,closedByPullRequestsReferences,updatedAt"
+    "title,body,url,state,stateReason,assignees,closedByPullRequestsReferences,updatedAt"
 )
 PR_FIELDS = (
-    "author,assignees,state,isDraft,mergedAt,reviewDecision,mergeStateStatus,"
+    "title,body,author,assignees,state,isDraft,mergedAt,reviewDecision,mergeStateStatus,"
     "statusCheckRollup,updatedAt"
 )
 
@@ -88,13 +88,6 @@ def fetch_delivery(
     kind = source.get("kind")
     url = source_url(source)
 
-    if kind == "text":
-        return _result(
-            status="fresh",
-            delivery_state="text_only",
-            fetched_at=now,
-            url=None,
-        )
     if (
         kind
         not in {
@@ -127,6 +120,11 @@ def fetch_delivery(
             return _result(
                 status="fresh",
                 delivery_state=_pr_delivery_state(pr),
+                title=pr["title"],
+                body=pr["body"],
+                owners=_unique_logins(
+                    ([pr["author"]] if pr["author"] else []) + pr["assignees"]
+                ),
                 assignees=pr["assignees"],
                 prs=[pr],
                 updated_at=pr["updated_at"],
@@ -176,9 +174,18 @@ def fetch_delivery(
             issue.get("updatedAt"), *(pr["updated_at"] for pr in prs)
         )
         prs.sort(key=lambda pr: (pr["repo"].casefold(), pr["number"]))
+        issue_owners = list(assignees)
+        issue_owners.extend(
+            pr["author"]
+            for pr in prs
+            if pr["author"] and not _closed_unmerged_pr(pr)
+        )
         return _result(
             status="fresh",
             delivery_state=_issue_delivery_state(issue, assignees, prs),
+            title=_required_string(issue.get("title"), "issue title is missing"),
+            body=_optional_body(issue.get("body")),
+            owners=_unique_logins(issue_owners),
             assignees=assignees,
             prs=prs,
             updated_at=updated_at,
@@ -190,42 +197,37 @@ def fetch_delivery(
 
 
 def actor_eligibility(delivery: Mapping[str, Any], actor: object) -> dict[str, Any]:
-    """Decide whether ``actor`` may acquire/adopt a WudiTask execution lease."""
+    """Decide whether ``actor`` may start a WudiTask agent run."""
 
     login = _actor_login(actor)
     state = delivery.get("delivery_state")
     owners = _delivery_owners(delivery)
-    other_owners = [owner for owner in owners if owner.casefold() != login.casefold()]
 
     if delivery.get("status") != "fresh" or state == "unavailable":
         return _eligibility(False, "unavailable", owners)
-    if state == "text_only":
-        return _eligibility(True, "text_only", owners)
     if state == "verification_needed":
         return _eligibility(False, "verification_required", owners)
     if state == "cancelled":
         return _eligibility(False, "cancelled", owners)
-    if other_owners:
-        return _eligibility(False, "owned_elsewhere", owners)
-    if owners:
-        return _eligibility(True, "adopt", owners)
-    return _eligibility(True, "available", owners)
+    if any(owner.casefold() == login.casefold() for owner in owners):
+        return _eligibility(True, "owner", owners)
+    return _eligibility(False, "owner_required", owners)
 
 
-def update_issue_assignee(
+def update_source_assignee(
     source: Mapping[str, Any],
     login: str,
     *,
     add: bool,
     runner: Runner | None = None,
 ) -> dict[str, Any]:
-    """Add or remove one assignee on an Issue source without hiding failure."""
+    """Add or remove one assignee on a canonical Issue or pull request."""
 
     if (
-        source.get("kind")
-        not in {
+        source.get("kind") not in {
             "github_issue",
             "github_issue_fallback",
+            "github_pull_request",
         }
         or source_url(source) is None
     ):
@@ -236,9 +238,10 @@ def update_issue_assignee(
         }
     run = runner or _default_runner
     flag = "--add-assignee" if add else "--remove-assignee"
+    noun = "pr" if source["kind"] == "github_pull_request" else "issue"
     command = [
         "gh",
-        "issue",
+        noun,
         "edit",
         str(source["number"]),
         "--repo",
@@ -254,7 +257,7 @@ def update_issue_assignee(
         return {
             "status": "unavailable",
             "changed": False,
-            "error": result.stderr.strip() or "GitHub Issue assignment failed",
+            "error": result.stderr.strip() or "GitHub assignment update failed",
         }
     return {"status": "updated", "changed": True, "error": None}
 
@@ -274,17 +277,7 @@ def _actor_login(actor: object) -> str:
 
 
 def _delivery_owners(delivery: Mapping[str, Any]) -> list[str]:
-    owners = _logins(delivery.get("assignees"))
-    prs = delivery.get("prs")
-    if isinstance(prs, list):
-        for pr in prs:
-            if not isinstance(pr, Mapping) or not _active_pr(pr):
-                continue
-            author = pr.get("author")
-            if isinstance(author, str) and author:
-                owners.append(author)
-            owners.extend(_logins(pr.get("assignees")))
-    return _unique_logins(owners)
+    return _logins(delivery.get("owners"))
 
 
 def _run_json(runner: Runner, command: Sequence[str]) -> dict[str, Any]:
@@ -372,6 +365,8 @@ def _normalize_pr(payload: Mapping[str, Any], repo: str, number: int) -> dict[st
         "repo": repo,
         "number": number,
         "url": f"https://github.com/{repo}/pull/{number}",
+        "title": _required_string(payload.get("title"), "pull request title is missing"),
+        "body": _optional_body(payload.get("body")),
         "author": author,
         "assignees": _logins(payload.get("assignees")),
         "state": state.upper(),
@@ -461,8 +456,8 @@ def _ready_to_merge(pr: Mapping[str, Any]) -> bool:
     )
 
 
-def _active_pr(pr: Mapping[str, Any]) -> bool:
-    return pr.get("state") == "OPEN" and not pr.get("merged_at")
+def _closed_unmerged_pr(pr: Mapping[str, Any]) -> bool:
+    return pr.get("state") == "CLOSED" and not pr.get("merged_at")
 
 
 def _logins(value: object) -> list[str]:
@@ -500,6 +495,20 @@ def _optional_string(value: object) -> str | None:
     return value if isinstance(value, str) and value else None
 
 
+def _optional_body(value: object) -> str:
+    if value is None:
+        return ""
+    if not isinstance(value, str):
+        raise _DeliveryQueryError("GitHub body is malformed")
+    return value
+
+
+def _required_string(value: object, message: str) -> str:
+    if not isinstance(value, str) or not value.strip():
+        raise _DeliveryQueryError(message)
+    return value
+
+
 def _upper_optional(value: object) -> str | None:
     result = _optional_string(value)
     return result.upper() if result else None
@@ -515,6 +524,9 @@ def _result(
     delivery_state: str,
     fetched_at: str,
     url: str | None,
+    title: str | None = None,
+    body: str | None = None,
+    owners: list[str] | None = None,
     assignees: list[str] | None = None,
     prs: list[dict[str, Any]] | None = None,
     updated_at: str | None = None,
@@ -523,7 +535,10 @@ def _result(
     return {
         "status": status,
         "delivery_state": delivery_state,
-        "assignees": assignees or [],
+        "title": title,
+        "body": body,
+        "owners": owners,
+        "assignees": assignees,
         "prs": prs or [],
         "updated_at": updated_at,
         "fetched_at": fetched_at,

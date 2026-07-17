@@ -31,18 +31,15 @@
       done: "Done",
       failed: "Failed",
       cancelled: "Cancelled",
-      passed: "Passed",
-      skipped: "Skipped",
       unstarted: "Unstarted",
       assigned: "Assigned",
       implementing: "Implementing",
       review: "Review",
       ready_to_merge: "Ready to merge",
       verification_needed: "Verification needed",
-      text_only: "Text only",
       unavailable: "Unavailable"
     };
-    return names[value] || value;
+    return names[value] || String(value || "Unknown").replace(/_/g, " ");
   }
 
   function formattedDate(value) {
@@ -56,24 +53,48 @@
     }).format(date);
   }
 
-  function claimNode(owner) {
+  function uniqueLogins(values) {
+    var seen = {};
+    var result = [];
+    (values || []).forEach(function (value) {
+      var login = typeof value === "string" ? value : value && value.login;
+      if (!login || seen[login.toLowerCase()]) {
+        return;
+      }
+      seen[login.toLowerCase()] = true;
+      result.push(login);
+    });
+    return result;
+  }
+
+  function identityNode(logins, emptyLabel) {
+    var names = uniqueLogins(logins);
     var wrapper = element("span", "owner");
-    if (!owner) {
+    if (!names.length) {
       wrapper.appendChild(element("span", "owner-placeholder", "-"));
-      wrapper.appendChild(element("span", "owner-name", "Unclaimed"));
+      wrapper.appendChild(element("span", "owner-name", emptyLabel));
       return wrapper;
     }
     var image = element("img");
-    image.src = "https://github.com/" + encodeURIComponent(owner.login) + ".png?size=64";
+    image.src = "https://github.com/" + encodeURIComponent(names[0]) + ".png?size=64";
     image.alt = "";
     image.loading = "lazy";
     image.referrerPolicy = "no-referrer";
     wrapper.appendChild(image);
-    wrapper.appendChild(element("span", "owner-name", owner.login));
+    wrapper.appendChild(element("span", "owner-name", names.join(", ")));
     return wrapper;
   }
 
+  function activeLogins(task) {
+    return uniqueLogins(task.active_agents);
+  }
+
+  function owners(task) {
+    return uniqueLogins(task.delivery && task.delivery.owners);
+  }
+
   function statusNode(state) {
+    state = state || "unavailable";
     return element("span", "state state-" + state, displayState(state));
   }
 
@@ -83,167 +104,236 @@
     return wrapper;
   }
 
-  function appendContexts(parent, values) {
-    if (!values || !values.length) {
-      parent.appendChild(element("p", "", "No additional context."));
-      return;
+  function safeUrl(value) {
+    try {
+      var parsed = new URL(value);
+      return parsed.protocol === "https:" || parsed.protocol === "http:" ? value : null;
+    } catch (ignored) {
+      return null;
     }
-    var ul = element("ul", "detail-list");
-    values.forEach(function (value) {
-      ul.appendChild(element("li", "", value));
-    });
-    parent.appendChild(ul);
   }
 
-  function appendCriteria(parent, criteria, results) {
-    var resultMap = {};
-    (results || []).forEach(function (result) {
-      resultMap[result.criterion_id] = result;
-    });
-    criteria.forEach(function (criterion) {
-      var item = element("div", "criterion");
-      var head = element("div");
-      head.appendChild(element("span", "criterion-id", criterion.id));
-      head.appendChild(document.createTextNode("  " + criterion.description));
-      item.appendChild(head);
-      item.appendChild(
-        element(
-          "span",
-          "verification",
-          criterion.verification.type + ": " + criterion.verification.value
-        )
-      );
-      if (resultMap[criterion.id]) {
-        var result = resultMap[criterion.id];
-        item.appendChild(
-          element(
-            "span",
-            "evidence",
-            displayState(result.status) + ": " + result.evidence
-          )
-        );
-      }
-      parent.appendChild(item);
-    });
-  }
-
-  function appendDependencies(parent, dependencies) {
-    if (!dependencies || !dependencies.length) {
-      parent.appendChild(element("p", "", "No dependencies."));
-      return;
-    }
-    dependencies.forEach(function (dependency) {
-      var item = element("div", "dependency");
-      var head = element("div", "dependency-head");
-      var title = dependency.exists
-        ? dependency.title + " (" + dependency.repo + ")"
-        : dependency.id;
-      head.appendChild(element("span", "dependency-title", title));
-      head.appendChild(statusNode(dependency.complete ? "done" : "blocked"));
-      item.appendChild(head);
-      item.appendChild(element("div", "task-id", dependency.id));
-      item.appendChild(element("div", "dependency-reason", dependency.reason));
-      if (dependency.goal) {
-        item.appendChild(element("div", "dependency-reason", "Goal: " + dependency.goal));
-      }
-      parent.appendChild(item);
-    });
-  }
-
-  function appendLinks(parent, links) {
-    var safeLinks = (links || []).filter(function (value) {
-      try {
-        var url = new URL(value);
-        return url.protocol === "https:" || url.protocol === "http:";
-      } catch (ignored) {
-        return false;
-      }
-    });
-    if (!safeLinks.length) {
-      parent.appendChild(element("p", "", "No links."));
-      return;
-    }
-    var wrapper = element("div", "links");
-    safeLinks.forEach(function (value, index) {
-      var link = element("a", "", "Link " + (index + 1));
-      link.href = value;
-      link.target = "_blank";
-      link.rel = "noreferrer";
-      wrapper.appendChild(link);
-    });
-    parent.appendChild(wrapper);
-  }
-
-  function appendSource(parent, task) {
+  function sourceLabel(task) {
     var source = task.source || {};
+    if (source.kind === "github_pull_request" && source.number) {
+      return "PR #" + source.number;
+    }
+    if (
+      (source.kind === "github_issue" || source.kind === "github_issue_fallback") &&
+      source.number
+    ) {
+      return "Issue #" + source.number;
+    }
+    return task.id;
+  }
+
+  function taskTitle(task) {
+    return (task.delivery && task.delivery.title) || sourceLabel(task);
+  }
+
+  function deliveryState(task) {
+    return (task.delivery && task.delivery.delivery_state) || "unavailable";
+  }
+
+  function appendCanonicalSource(parent, task) {
     var delivery = task.delivery || {};
-    if (delivery.url) {
-      var link = element("a", "", delivery.url);
-      link.href = delivery.url;
+    var url = safeUrl(delivery.url);
+    var heading = sourceLabel(task) + " · " + taskTitle(task);
+    if (url) {
+      var link = element("a", "", heading);
+      link.href = url;
       link.target = "_blank";
       link.rel = "noreferrer";
       parent.appendChild(link);
     } else {
-      parent.appendChild(element("p", "", "Text source: " + (source.reason || "No reason recorded.")));
+      parent.appendChild(element("p", "", heading));
     }
-    if (source.fallback_reason) {
-      parent.appendChild(element("span", "verification", "Fallback: " + source.fallback_reason));
+    parent.appendChild(
+      element(
+        "p",
+        "",
+        delivery.body || "Canonical source body is unavailable in this snapshot."
+      )
+    );
+    if (task.source && task.source.fallback_reason) {
+      parent.appendChild(
+        element("span", "verification", "Hub fallback: " + task.source.fallback_reason)
+      );
+    }
+  }
+
+  function appendOwnership(parent, task) {
+    var ownerNames = owners(task);
+    var agentNames = activeLogins(task);
+    var ownerEmptyLabel =
+      task.delivery && task.delivery.status === "fresh" ? "Unassigned" : "Unknown";
+    parent.appendChild(element("span", "verification", "Owners"));
+    parent.appendChild(identityNode(ownerNames, ownerEmptyLabel));
+    parent.appendChild(element("span", "verification", "Active agents"));
+    parent.appendChild(identityNode(agentNames, "No active agent"));
+  }
+
+  function appendChecks(parent, checks) {
+    if (!checks || typeof checks !== "object") {
+      return;
+    }
+    var parts = [];
+    if (typeof checks.successful === "number" && typeof checks.total === "number") {
+      parts.push(checks.successful + "/" + checks.total + " passed");
+    }
+    if (checks.pending) {
+      parts.push(checks.pending + " pending");
+    }
+    if (checks.failed) {
+      parts.push(checks.failed + " failed");
+    }
+    if (parts.length) {
+      parent.appendChild(element("span", "verification", "Checks: " + parts.join(", ")));
     }
   }
 
   function appendDelivery(parent, delivery) {
     if (!delivery) {
-      parent.appendChild(element("p", "", "Delivery state unavailable."));
+      parent.appendChild(statusNode("unavailable"));
       return;
     }
     parent.appendChild(statusNode(delivery.delivery_state));
-    if (delivery.assignees && delivery.assignees.length) {
-      parent.appendChild(element("span", "verification", "Assignees: " + delivery.assignees.join(", ")));
-    }
     (delivery.prs || []).forEach(function (pr) {
       var row = element("div", "delivery-pr");
-      var link = element("a", "", pr.repo + "#" + pr.number);
-      link.href = pr.url;
-      link.target = "_blank";
-      link.rel = "noreferrer";
-      row.appendChild(link);
-      row.appendChild(document.createTextNode(" · " + pr.state + (pr.author ? " · " + pr.author : "")));
-      if (pr.checks) {
+      var label = (pr.repo || "PR") + (pr.number ? "#" + pr.number : "");
+      var url = safeUrl(pr.url);
+      if (url) {
+        var link = element("a", "", label);
+        link.href = url;
+        link.target = "_blank";
+        link.rel = "noreferrer";
+        row.appendChild(link);
+      } else {
+        row.appendChild(element("span", "", label));
+      }
+      var facts = [];
+      if (pr.state) {
+        facts.push(pr.state);
+      }
+      if (pr.is_draft) {
+        facts.push("draft");
+      }
+      if (pr.author) {
+        facts.push("by " + pr.author);
+      }
+      if (facts.length) {
+        row.appendChild(document.createTextNode(" · " + facts.join(" · ")));
+      }
+      if (pr.title) {
+        row.appendChild(element("span", "verification", pr.title));
+      }
+      if (pr.review_decision) {
         row.appendChild(
-          element(
-            "span",
-            "verification",
-            "Checks: " + pr.checks.successful + "/" + pr.checks.total +
-              " passed, " + pr.checks.pending + " pending, " + pr.checks.failed + " failed"
-          )
+          element("span", "verification", "Review: " + displayState(pr.review_decision))
         );
       }
+      if (pr.merge_state_status) {
+        row.appendChild(
+          element("span", "verification", "Merge: " + displayState(pr.merge_state_status))
+        );
+      }
+      appendChecks(row, pr.checks);
       parent.appendChild(row);
     });
     if (delivery.error) {
       parent.appendChild(element("span", "evidence", delivery.error));
     }
     if (delivery.fetched_at) {
-      parent.appendChild(element("span", "verification", "Fetched " + formattedDate(delivery.fetched_at)));
+      parent.appendChild(
+        element("span", "verification", "Fetched " + formattedDate(delivery.fetched_at))
+      );
     }
   }
 
+  function dependenciesFor(task) {
+    var expanded = task.derived && task.derived.dependencies;
+    if (Array.isArray(expanded) && (expanded.length || !(task.dependencies || []).length)) {
+      return expanded;
+    }
+    return (task.dependencies || []).map(function (id) {
+      return { id: id, exists: false, complete: false, reason: "Not expanded" };
+    });
+  }
+
+  function appendDependencies(parent, dependencies) {
+    if (!dependencies.length) {
+      parent.appendChild(element("p", "", "No dependencies."));
+      return;
+    }
+    dependencies.forEach(function (dependency) {
+      var item = element("div", "dependency");
+      var head = element("div", "dependency-head");
+      var label = dependency.delivery_title || dependency.title || dependency.id;
+      if (dependency.repo) {
+        label += " (" + dependency.repo + ")";
+      }
+      head.appendChild(element("span", "dependency-title", label));
+      head.appendChild(statusNode(dependency.complete ? "done" : "blocked"));
+      item.appendChild(head);
+      item.appendChild(element("div", "task-id", dependency.id));
+      if (dependency.reason) {
+        item.appendChild(element("div", "dependency-reason", dependency.reason));
+      }
+      parent.appendChild(item);
+    });
+  }
+
+  function appendCompletion(parent, completion) {
+    parent.appendChild(element("p", "", completion.result));
+    parent.appendChild(
+      element(
+        "span",
+        "verification",
+        formattedDate(completion.completed_at) + " by " + completion.completed_by
+      )
+    );
+    var participantNames = uniqueLogins(completion.participants);
+    parent.appendChild(
+      element(
+        "span",
+        "verification",
+        "Participants: " + (participantNames.length ? participantNames.join(", ") : "None")
+      )
+    );
+    if (completion.evidence && completion.evidence.length) {
+      var evidence = element("ul", "detail-list");
+      completion.evidence.forEach(function (value) {
+        evidence.appendChild(element("li", "", value));
+      });
+      parent.appendChild(evidence);
+    } else {
+      parent.appendChild(element("span", "evidence", "No completion evidence recorded."));
+    }
+  }
+
+  function appendCoordination(parent, task) {
+    parent.appendChild(element("p", "", "Execution repository: " + task.repo));
+    parent.appendChild(
+      element("span", "verification", "Created by " + task.created_by + " · " + formattedDate(task.created_at))
+    );
+  }
+
   function taskRow(task, archived) {
-    var derived = archived ? null : task.derived;
-    var state = archived ? task.completion.outcome : derived.state;
-    var deliveryState = task.delivery ? task.delivery.delivery_state : "unavailable";
+    var state = archived
+      ? task.completion.outcome
+      : (task.derived && task.derived.state) || "unavailable";
     var details = element("details", "task-row");
     var summary = element("summary", "task-summary");
     summary.appendChild(element("span", "priority priority-" + task.priority, task.priority));
 
     var name = element("span", "task-name");
-    name.appendChild(element("span", "task-title", task.title));
+    name.appendChild(element("span", "task-title", taskTitle(task)));
     name.appendChild(element("span", "task-id", task.id));
     summary.appendChild(name);
     summary.appendChild(element("span", "repo-name", task.repo));
-    summary.appendChild(claimNode(task.derived.claim_holder));
+    summary.appendChild(identityNode(activeLogins(task), archived ? "Finished" : "Idle"));
     summary.appendChild(statusNode(state));
-    summary.appendChild(statusNode(deliveryState));
+    summary.appendChild(statusNode(deliveryState(task)));
     details.appendChild(summary);
 
     var body = element("div", "task-detail");
@@ -251,52 +341,31 @@
     var left = element("div");
     var right = element("div");
 
-    var goal = section("Goal");
-    goal.appendChild(element("p", "", task.goal));
-    left.appendChild(goal);
+    var canonical = section("Canonical source");
+    appendCanonicalSource(canonical, task);
+    left.appendChild(canonical);
 
-    var context = section("Context");
-    appendContexts(context, task.context);
-    left.appendChild(context);
-
-    var source = section("Canonical source");
-    appendSource(source, task);
-    left.appendChild(source);
+    var responsibility = section("Responsibility and execution");
+    appendOwnership(responsibility, task);
+    left.appendChild(responsibility);
 
     var delivery = section("GitHub delivery");
     appendDelivery(delivery, task.delivery);
     left.appendChild(delivery);
 
     if (archived) {
-      var completion = section("Completion");
-      completion.appendChild(element("p", "", task.completion.result));
-      completion.appendChild(
-        element(
-          "span",
-          "verification",
-          formattedDate(task.completion.completed_at) +
-            " by " +
-            task.completion.completed_by.login
-        )
-      );
+      var completion = section("Archive result and evidence");
+      appendCompletion(completion, task.completion);
       left.appendChild(completion);
     }
 
-    var acceptance = section("Acceptance");
-    appendCriteria(
-      acceptance,
-      task.acceptance_criteria,
-      archived ? task.completion.acceptance_results : []
-    );
-    right.appendChild(acceptance);
-
     var dependencies = section("Dependencies");
-    appendDependencies(dependencies, task.derived.dependencies);
+    appendDependencies(dependencies, dependenciesFor(task));
     right.appendChild(dependencies);
 
-    var links = section("Links");
-    appendLinks(links, task.links);
-    right.appendChild(links);
+    var coordination = section("Hub coordination");
+    appendCoordination(coordination, task);
+    right.appendChild(coordination);
 
     grid.appendChild(left);
     grid.appendChild(right);
@@ -306,25 +375,51 @@
   }
 
   function searchText(task, archived) {
+    var delivery = task.delivery || {};
+    var source = task.source || {};
     var values = [
       task.id,
-      task.title,
       task.repo,
-      task.goal,
-      task.derived.claim_holder ? task.derived.claim_holder.login : "",
-      (task.delivery.assignees || []).join(" "),
-      task.delivery.delivery_state,
-      (task.context || []).join(" "),
-      (task.acceptance_criteria || [])
-        .map(function (criterion) {
-          return criterion.description + " " + criterion.verification.value;
-        })
-        .join(" ")
+      task.created_by,
+      source.repo,
+      source.number,
+      sourceLabel(task),
+      taskTitle(task),
+      delivery.body,
+      delivery.delivery_state,
+      owners(task).join(" "),
+      activeLogins(task).join(" ")
     ];
+    (delivery.prs || []).forEach(function (pr) {
+      values.push(
+        pr.repo,
+        pr.number,
+        pr.author,
+        pr.title,
+        pr.body,
+        pr.state,
+        pr.review_decision,
+        pr.merge_state_status,
+        uniqueLogins(pr.assignees).join(" ")
+      );
+    });
+    dependenciesFor(task).forEach(function (dependency) {
+      values.push(dependency.id, dependency.repo, dependency.title, dependency.reason);
+    });
     if (archived) {
-      values.push(task.completion.result);
+      values.push(
+        task.completion.result,
+        task.completion.completed_by,
+        (task.completion.evidence || []).join(" "),
+        uniqueLogins(task.completion.participants).join(" ")
+      );
     }
-    return values.join(" ").toLowerCase();
+    return values
+      .filter(function (value) {
+        return value !== undefined && value !== null;
+      })
+      .join(" ")
+      .toLowerCase();
   }
 
   function render() {
@@ -343,7 +438,7 @@
         (!query || searchText(task, archived).indexOf(query) !== -1) &&
         (!repo || task.repo === repo) &&
         (!selectedState || taskState === selectedState) &&
-        (!selectedDelivery || task.delivery.delivery_state === selectedDelivery)
+        (!selectedDelivery || deliveryState(task) === selectedDelivery)
       );
     });
 
@@ -400,9 +495,7 @@
       option.value = repo;
       repoFilter.appendChild(option);
     });
-    if (repositories.indexOf(selected) !== -1) {
-      repoFilter.value = selected;
-    }
+    repoFilter.value = repositories.indexOf(selected) !== -1 ? selected : "";
   }
 
   function updateStateOptions() {
@@ -422,22 +515,25 @@
         values.push([state, displayState(state)]);
       }
     });
+    Object.keys(present).sort().forEach(function (state) {
+      if (order.indexOf(state) === -1) {
+        values.push([state, displayState(state)]);
+      }
+    });
     stateFilter.replaceChildren();
     values.forEach(function (entry) {
       var option = element("option", "", entry[1]);
       option.value = entry[0];
       stateFilter.appendChild(option);
     });
-    if (present[selected]) {
-      stateFilter.value = selected;
-    }
+    stateFilter.value = present[selected] ? selected : "";
   }
 
   function updateDeliveryOptions() {
     var selected = deliveryFilter.value;
     var present = {};
     viewTasks().forEach(function (task) {
-      present[task.delivery.delivery_state] = true;
+      present[deliveryState(task)] = true;
     });
     deliveryFilter.replaceChildren();
     var all = element("option", "", "All delivery states");
@@ -448,9 +544,7 @@
       option.value = state;
       deliveryFilter.appendChild(option);
     });
-    if (present[selected]) {
-      deliveryFilter.value = selected;
-    }
+    deliveryFilter.value = present[selected] ? selected : "";
   }
 
   function updateFilters() {
@@ -472,6 +566,9 @@
         return response.json();
       })
       .then(function (data) {
+        if (!data || !Array.isArray(data.open_tasks) || !Array.isArray(data.archived_tasks)) {
+          throw new Error("Snapshot does not contain task lists");
+        }
         snapshot = data;
         updateSummary();
         updateFilters();

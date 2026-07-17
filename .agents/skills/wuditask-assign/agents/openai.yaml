@@ -1,0 +1,4 @@
+interface:
+  display_name: "Assign WudiTask"
+  short_description: "Assign GitHub ownership without starting work"
+  default_prompt: "Use $wuditask-assign to assign an authorized GitHub login to this task source."

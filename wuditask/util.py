@@ -14,6 +14,7 @@ from urllib.parse import urlparse
 from .errors import WudiTaskError
 
 TASK_ID_RE = re.compile(r"^WDT-\d{8}T\d{6}Z-[0-9A-F]{6}$")
+RUN_ID_RE = re.compile(r"^WDX-[0-9A-F]{24}$")
 DELETION_RECEIPT_ID_RE = re.compile(r"^WDR-[0-9A-F]{24}$")
 REPO_RE = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
 UTC_RE = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$")
@@ -30,18 +31,18 @@ def new_task_id(now: str | None = None) -> str:
     return f"WDT-{stamp}-{uuid.uuid4().hex[:6].upper()}"
 
 
-def new_claim_token() -> str:
-    return uuid.uuid4().hex
+def new_run_id() -> str:
+    return f"WDX-{uuid.uuid4().hex[:24].upper()}"
 
 
 def deletion_receipt_id(
     task_ids: list[str],
     reason: str,
-    github_id: int,
+    login: str,
 ) -> str:
     payload = json.dumps(
         {
-            "github_id": github_id,
+            "login": login.strip().casefold(),
             "reason": reason.strip(),
             "task_ids": sorted(task_ids),
         },

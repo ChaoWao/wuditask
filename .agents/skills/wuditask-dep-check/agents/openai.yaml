@@ -1,4 +1,0 @@
-interface:
-  display_name: "Check WudiTask Dependencies"
-  short_description: "Inspect readiness and dependency evidence"
-  default_prompt: "Use $wuditask-dep-check to explain whether this WudiTask is ready."

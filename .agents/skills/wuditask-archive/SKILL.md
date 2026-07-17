@@ -1,55 +1,66 @@
 ---
 name: wuditask-archive
-description: Archive a WudiTask as done, failed, or cancelled. Use when the user asks to complete, close, finish, fail, cancel, or archive shared work. Require criterion-level verification evidence for done outcomes and a concrete reason for failed or cancelled outcomes.
+description: Archive a WudiTask as done, failed, or cancelled. Use when canonical GitHub delivery is terminal and the user wants to preserve the shared outcome, source-defined acceptance evidence, and any participating agent runs.
 ---
 
 # Archive a WudiTask
 
-Use the registered WudiTask CLI. Do not edit, move, or delete task JSON directly.
-Ordinary done, failed, and cancelled outcomes remain archived. Only when the
-user explicitly identifies an already archived record as erroneous, switch to
-`$wuditask-delete` or `/wuditask-delete`; do not overload this workflow.
+Use the registered CLI. Do not edit, move, or delete task JSON directly.
+Ordinary outcomes remain archived; use `$wuditask-delete` only for an
+explicitly identified erroneous archived record.
 
 ## Locate the CLI
 
-Read `~/.wuditask/config.json`, take its absolute `tool_path`, and invoke `python3 <tool_path>/tools/wuditask.py --json ...`. The CLI reads the task Hub remote and branch from the same config. If registration is missing or stale, ask the user to invoke `$wuditask-install` or `/wuditask-install`.
+Read `~/.wuditask/config.json`, take its absolute `tool_path`, and invoke
+`python3 <tool_path>/tools/wuditask.py --json ...`.
 
-## Prepare the outcome
+## Verify the source contract
 
-Before archiving `done`:
+Before `done`:
 
-1. Recheck that the claimed task and repository match.
-2. Run every acceptance verification in the work repository.
-3. Commit and push the implementation according to that repository's process.
-4. Record specific evidence for every acceptance criterion.
-5. Confirm the canonical GitHub Issue is currently completed (normally because
-   a closing PR merged), or the canonical PR itself is merged. An open or
-   reopened Issue remains active even if it retains a historical merged closing
-   PR. GitHub completion enters verification; it does not automatically archive
-   WudiTask.
+1. Read the canonical Issue or pull request; it is the only narrative and
+   acceptance contract.
+2. Run or inspect every acceptance check described there.
+3. Commit and push delivery through the execution repository's workflow.
+4. Confirm the canonical Issue is completed or the canonical pull request is
+   merged. An open or reopened Issue remains active.
+5. Record concrete free-form evidence and use the exact `run_id` returned by
+   this agent's successful `execute`.
 
-Do not reduce evidence to “all tests pass.” Name the command, result, URL, file, or observable fact.
+For `failed` or `cancelled`, provide a concrete result. A cancelled
+GitHub-backed task must be terminal as not planned; nonterminal or unavailable
+delivery fails closed. These outcomes do not unblock downstream tasks.
 
-For `failed` or `cancelled`, provide a concrete result or reason. These outcomes
-intentionally do not unblock downstream tasks. An unclaimed task may be
-archived directly with either terminal outcome even when its dependencies are
-blocked; the ordinary Hub push is the atomic race point. A task claimed by
-another human still cannot be archived. For GitHub-backed `cancelled`, close
-the canonical delivery as `NOT_PLANNED`. A `failed` outcome also permits a
-completed delivery whose WudiTask acceptance verification failed; active or
-unavailable delivery is not terminal.
+Read the current task before choosing the authorization form:
+
+- If any active agents exist, the authenticated caller must own one of those
+  entries and pass its exact `--run-id`. The archive snapshots every active
+  entry as a participant and clears the entire active set.
+- If no active agents exist, `failed` or `cancelled` must omit `--run-id` and
+  may be archived only by the task's authenticated `created_by` login. This
+  covers unclaimed work and work whose run was already released; participants
+  are empty. A stale run ID is rejected instead of being ignored.
+- `done` always requires the caller's matching active `--run-id`, live owner
+  status, terminal successful delivery, and evidence.
 
 ## Archive
 
 ```bash
 python3 <tool_path>/tools/wuditask.py --json archive TASK_ID \
+  --run-id RUN_ID \
   --outcome done \
-  --result "Validation implemented and tests pass" \
-  --evidence "AC-1=python3 -m unittest tests.test_upload: 12 passed"
+  --result "Validation implemented and verified" \
+  --evidence "python3 -m unittest tests.test_upload: 12 passed" \
+  --evidence "Merged pull request: https://github.com/acme/api/pull/88"
 ```
 
-Completion is confirmed only when `ok=true`, `confirmed=true`, and `sync.confirmed=true`. On `insufficient_archive_evidence`, run or check the missing criteria and retry with criterion-level evidence. Never archive a lease held by another human identity.
+Evidence is a repeatable list tied to the acceptance requirements in the
+source, not a duplicated acceptance-evidence table in Hub data. For active
+work, the matching active-agent entry authorizes the archive and completion
+preserves participating `login` and `run_id` values. For an unclaimed or
+released terminal non-done task, the authenticated creator authorizes the
+archive and the participant list is empty.
 
-An Issue closed as `NOT_PLANNED` must not be archived `done`; use `cancelled`
-with a concrete reason. A GitHub-backed `done` archive fails closed when live
-delivery cannot be read.
+Report completion only when `ok=true`, `confirmed=true`, and
+`sync.confirmed=true`. Treat insufficient evidence, a run mismatch, incomplete
+delivery, or unavailable GitHub state as a hard stop.

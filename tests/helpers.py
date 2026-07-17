@@ -8,8 +8,10 @@ from wuditask.model import Identity
 from wuditask.repository import TaskRepository
 from wuditask.workflow import create_task
 
-ACTOR = Identity("alice", 1001)
-OTHER_ACTOR = Identity("bob", 1002)
+ACTOR = Identity("alice")
+OTHER_ACTOR = Identity("bob")
+RUN_ID = "WDX-0123456789ABCDEF01234567"
+OTHER_RUN_ID = "WDX-89ABCDEF0123456789ABCDEF"
 
 
 def spec(
@@ -17,28 +19,19 @@ def spec(
     *,
     repo: str = "acme/service",
     dependencies: list[str] | None = None,
+    number: int = 12,
 ) -> dict[str, Any]:
+    # The title is deliberately not persisted: GitHub is the delivery source of truth.
+    del title
     return {
-        "title": title,
         "repo": repo,
         "source": {
-            "kind": "text",
-            "reason": "Synthetic task used by the WudiTask test suite.",
+            "kind": "github_issue",
+            "repo": repo,
+            "number": number,
         },
-        "goal": f"Complete {title.lower()} with observable behavior.",
-        "context": ["Keep the public API stable."],
-        "acceptance_criteria": [
-            {
-                "description": f"{title} passes its regression check.",
-                "verification": {
-                    "type": "command",
-                    "value": "python3 -m unittest",
-                },
-            }
-        ],
         "dependencies": dependencies or [],
         "priority": "P2",
-        "links": [],
     }
 
 
@@ -55,10 +48,11 @@ def add_task(
     title: str = "Test task",
     repo: str = "acme/service",
     dependencies: list[str] | None = None,
+    number: int = 12,
 ) -> dict[str, Any]:
     return create_task(
         repository,
-        spec(title, repo=repo, dependencies=dependencies),
+        spec(title, repo=repo, dependencies=dependencies, number=number),
         ACTOR,
         task_id=task_id,
         now="2026-07-11T12:00:00Z",

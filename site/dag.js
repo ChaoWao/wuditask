@@ -91,7 +91,15 @@
     return task.id || "Unknown task";
   }
 
+  function canonicalTitle(task) {
+    return (task.delivery && task.delivery.title) || sourceLabel(task);
+  }
+
   function canonicalUrl(task) {
+    var deliveryUrl = task.delivery && task.delivery.url;
+    if (typeof deliveryUrl === "string" && /^https?:\/\//.test(deliveryUrl)) {
+      return deliveryUrl;
+    }
     var source = task.source || {};
     if (!source.repo || !source.number) {
       return null;
@@ -409,7 +417,7 @@
       "data-task-repo": task.repo,
       "data-repo-color": color,
       "data-source-label": label,
-      "aria-label": label + ", " + task.title + ", " + status
+      "aria-label": label + ", " + canonicalTitle(task) + ", " + status
     });
     if (url) {
       setAttributes(wrapper, {
@@ -422,7 +430,7 @@
     }
 
     var title = svgElement("title");
-    title.textContent = label + " · " + task.title + " · " + task.repo + " · " + status;
+    title.textContent = label + " · " + canonicalTitle(task) + " · " + task.repo + " · " + status;
     wrapper.appendChild(title);
     wrapper.appendChild(
       setAttributes(svgElement("rect"), {
@@ -475,7 +483,7 @@
       "font-size": 13,
       "font-weight": 650
     });
-    taskTitle.textContent = truncate(task.title, 31);
+    taskTitle.textContent = truncate(canonicalTitle(task), 31);
     wrapper.appendChild(taskTitle);
 
     var repoText = setAttributes(svgElement("text"), {

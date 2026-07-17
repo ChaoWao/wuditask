@@ -1,4 +1,4 @@
 interface:
   display_name: "Archive WudiTask"
-  short_description: "Archive task outcomes with acceptance evidence"
-  default_prompt: "Use $wuditask-archive to record this task outcome and its acceptance evidence."
+  short_description: "Archive source-verified outcomes and evidence"
+  default_prompt: "Use $wuditask-archive to archive this terminal task with source-defined acceptance evidence."

@@ -1,16 +1,12 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "urn:wuditask:schema:hub:v2",
+  "$id": "urn:wuditask:schema:hub:v3",
   "title": "WudiTask task Hub",
   "type": "object",
   "additionalProperties": false,
   "required": ["schema_version", "tool_api_version"],
   "properties": {
-    "schema_version": {
-      "const": 2
-    },
-    "tool_api_version": {
-      "const": 3
-    }
+    "schema_version": {"const": 3},
+    "tool_api_version": {"const": 4}
   }
 }

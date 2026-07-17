@@ -1,4 +1,4 @@
 interface:
   display_name: "List WudiTasks"
-  short_description: "List shared WudiTask queue entries safely"
-  default_prompt: "Use $wuditask-list to list tasks in the shared WudiTask queue."
+  short_description: "List queue owners and active agents safely"
+  default_prompt: "Use $wuditask-list to list relevant entries in the shared WudiTask queue."

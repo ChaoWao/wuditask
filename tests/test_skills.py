@@ -10,15 +10,16 @@ SKILLS_ROOT = ROOT / ".agents" / "skills"
 EXPECTED_SKILLS = {
     "wuditask-add",
     "wuditask-archive",
+    "wuditask-assign",
+    "wuditask-check",
     "wuditask-delete",
-    "wuditask-dep-check",
     "wuditask-execute",
     "wuditask-install",
     "wuditask-list",
-    "wuditask-reconcile",
     "wuditask-release",
     "wuditask-selfupdate",
     "wuditask-show",
+    "wuditask-unassign",
 }
 
 
@@ -77,6 +78,47 @@ class SkillTests(unittest.TestCase):
         self.assertIn("read-only `list` command", task_list)
         self.assertIn("read-only `show` command", task_show)
 
+    def test_check_replaces_dependency_and_reconcile_skills(self) -> None:
+        check = (SKILLS_ROOT / "wuditask-check" / "SKILL.md").read_text()
+        self.assertIn("read-only `check` command", check)
+        self.assertIn("check [TASK_ID]", check)
+        self.assertIn("dependencies", check)
+        self.assertIn("active agents", check)
+        self.assertFalse((SKILLS_ROOT / "wuditask-dep-check").exists())
+        self.assertFalse((SKILLS_ROOT / "wuditask-reconcile").exists())
+
+    def test_assignment_and_execution_are_independent(self) -> None:
+        assign = (SKILLS_ROOT / "wuditask-assign" / "SKILL.md").read_text()
+        unassign = (SKILLS_ROOT / "wuditask-unassign" / "SKILL.md").read_text()
+        execute = (SKILLS_ROOT / "wuditask-execute" / "SKILL.md").read_text()
+        release = (SKILLS_ROOT / "wuditask-release" / "SKILL.md").read_text()
+
+        self.assertIn("assign TASK_ID --to LOGIN", assign)
+        self.assertIn("explicitly names and authorizes", assign)
+        self.assertIn("unassign TASK_ID --from LOGIN", unassign)
+        self.assertIn("explicitly names and authorizes", unassign)
+        self.assertIn("never adds a Hub `active_agents` entry", assign)
+        self.assertIn("first self-assigns the authenticated login", execute)
+        self.assertIn("do not roll the assignment back", execute)
+        self.assertRegex(execute, r"Multiple\s+different owner logins")
+        self.assertIn("run_id", execute)
+        self.assertIn("--run-id RUN_ID", release)
+        self.assertIn("never removes an Issue", release)
+
+    def test_add_and_archive_keep_acceptance_in_the_source(self) -> None:
+        add = (SKILLS_ROOT / "wuditask-add" / "SKILL.md").read_text()
+        archive = (SKILLS_ROOT / "wuditask-archive" / "SKILL.md").read_text()
+
+        self.assertIn("## Establish the source first", add)
+        self.assertIn("acceptance requirements before", add)
+        self.assertNotIn("--accept", add)
+        self.assertNotIn("--text-source-reason", add)
+        self.assertIn("only narrative and", archive)
+        self.assertIn("acceptance contract", archive)
+        self.assertIn("--run-id RUN_ID", archive)
+        self.assertIn("--evidence", archive)
+        self.assertNotIn("AC-N", archive)
+
     def test_delete_is_explicit_and_preserves_dependency_integrity(self) -> None:
         delete = (SKILLS_ROOT / "wuditask-delete" / "SKILL.md").read_text()
         self.assertIn("explicitly", delete)
@@ -91,13 +133,10 @@ class SkillTests(unittest.TestCase):
 
     def test_add_and_selfupdate_policy_invariants(self) -> None:
         add = (SKILLS_ROOT / "wuditask-add" / "SKILL.md").read_text(encoding="utf-8")
-        self.assertIn("canonical source", add)
-        self.assertIn("fallback Issue in the configured Hub repository", add)
-        self.assertLess(
-            add.index("## Build the execution contract"),
-            add.index("## Establish the canonical source"),
-        )
-        self.assertIn("transient authentication or network error", add)
+        self.assertIn("canonical GitHub source", add)
+        self.assertIn("configured Hub repository", add)
+        self.assertIn("acceptance requirements", add)
+        self.assertIn("temporary authentication or network failure", add)
 
         selfupdate = (SKILLS_ROOT / "wuditask-selfupdate" / "SKILL.md").read_text(
             encoding="utf-8"
@@ -107,7 +146,7 @@ class SkillTests(unittest.TestCase):
             selfupdate,
         )
         self.assertIn(
-            "Do not run WudiTask `add`, `execute`, `archive`, `delete`, or `release`",
+            "`add`, `assign`, `execute`, `release`, `unassign`, `archive`, or `delete`",
             selfupdate,
         )
         self.assertIn("~/.wuditask/worktrees/<slug>", selfupdate)
@@ -151,6 +190,8 @@ class SkillTests(unittest.TestCase):
         self.assertIn("hub_cache", install)
         self.assertIn("XDG_CACHE_HOME", install)
         self.assertIn("isolated operation worktree", install)
+        self.assertIn("exactly twelve skills", install)
+        self.assertIn("retired dep-check/reconcile links", install)
 
 
 if __name__ == "__main__":

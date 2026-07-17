@@ -1,4 +1,4 @@
 interface:
-  display_name: "Release WudiTask"
-  short_description: "Return owned work safely to the shared queue"
-  default_prompt: "Use $wuditask-release to return this claimed task to the shared queue."
+  display_name: "Release WudiTask Run"
+  short_description: "Stop one exact active agent run safely"
+  default_prompt: "Use $wuditask-release to stop this exact login and run_id without changing GitHub ownership."

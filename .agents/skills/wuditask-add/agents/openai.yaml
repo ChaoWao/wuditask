@@ -1,4 +1,4 @@
 interface:
   display_name: "Add WudiTask"
-  short_description: "Record well-specified GitHub-backed work"
-  default_prompt: "Use $wuditask-add to record this work in the shared WudiTask queue."
+  short_description: "Add coordination for canonical GitHub work"
+  default_prompt: "Use $wuditask-add to add this canonical GitHub Issue or pull request to the shared queue."

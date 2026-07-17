@@ -1,32 +1,36 @@
 ---
 name: wuditask-release
-description: Return a claimed WudiTask execution lease to the shared queue without archiving it. Use when the current claim holder asks to release or stop work.
+description: Stop one WudiTask agent run without changing GitHub ownership or archiving the task. Use when an executing agent pauses, abandons, or hands off its exact login/run_id entry.
 ---
 
-# Release a WudiTask
+# Release a WudiTask Agent Run
 
-Use the registered WudiTask CLI. Never clear the claim field manually.
+Use the registered CLI. Never edit `active_agents` directly.
 
 ## Locate the CLI
 
-Read `~/.wuditask/config.json`, take its absolute `tool_path`, and invoke `python3 <tool_path>/tools/wuditask.py --json ...`. The CLI reads the task Hub remote and branch from the same config. If registration is missing or stale, ask the user to invoke `$wuditask-install` or `/wuditask-install`.
+Read `~/.wuditask/config.json`, take its absolute `tool_path`, and invoke
+`python3 <tool_path>/tools/wuditask.py --json ...`.
 
-## Release
+## Release the exact run
 
-Confirm the current human claim holder intends to return the lease and record a concrete reason:
+Use the `run_id` returned by execute and record a concrete reason:
 
 ```bash
 python3 <tool_path>/tools/wuditask.py --json release TASK_ID \
+  --run-id RUN_ID \
   --reason "Waiting for product decision"
 ```
 
-For a GitHub Issue source, release removes the current user's Issue assignment,
-rechecks delivery, and then clears the Hub lease. It refuses to claim the task
-is back in the queue while the current user owns an active closing PR. Any
-GitHub/API or compensation uncertainty fails closed and leaves an actionable
-reconciliation error. Other assignees are never removed.
+Release removes only the current authenticated login with that exact
+`run_id`. It never removes an Issue or pull-request assignee, never changes a
+PR author, and never stops another login's run. A stale run ID must fail rather
+than remove a newer run by the same login.
 
-Release is confirmed only when `ok=true`, `confirmed=true`, and
-`sync.confirmed=true`. Stop on `claim_holder_mismatch`; never spoof a GitHub
-identity or release another person's lease. Local `--hub --local` mode changes
-only the explicit local Hub and never edits a real Issue assignment.
+GitHub ownership and execution are independent. Release must remain possible
+when live delivery is unavailable or the login was externally unassigned; use
+`$wuditask-unassign` separately when GitHub responsibility should also change.
+
+Report success only when `ok=true`, `confirmed=true`, and
+`sync.confirmed=true`. Stop on `agent_not_active`, run mismatch, or uncertain
+push status; never spoof a login or reuse another agent's `run_id`.

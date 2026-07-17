@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <meta name="color-scheme" content="light">
     <meta name="theme-color" content="#172126">
-    <title>Dependencies · WudiTask</title>
+    <title>Dependency graph · WudiTask</title>
     <link rel="stylesheet" href="styles.css">
     <style>
       .dag-workspace {
@@ -185,6 +185,7 @@
     </style>
   </head>
   <body>
+    <a class="skip-link" href="#main-content">Skip to content</a>
     <header class="topbar">
       <div class="brand">
         <span class="brand-mark" aria-hidden="true">W</span>
@@ -193,22 +194,27 @@
           <p>Distributed work queue</p>
         </div>
       </div>
-      <nav class="site-nav" aria-label="WudiTask pages">
-        <a href="index.html">Tasks</a>
-        <a class="is-active" href="dag.html" aria-current="page">Dependencies</a>
-        <a href="install.html">Install</a>
-      </nav>
+      <div class="site-navigation">
+        <nav class="site-nav site-nav-info" aria-label="Learn about WudiTask">
+          <a href="workflow.html">Workflow</a>
+          <a href="install.html">Join us</a>
+        </nav>
+        <nav class="site-nav site-nav-work" aria-label="Explore work">
+          <a href="index.html">Tasks</a>
+          <a class="is-active" href="dag.html" aria-current="page">Dependency graph</a>
+        </nav>
+      </div>
       <div class="sync-area">
         <span id="sync-status" class="sync-status" aria-live="polite">Loading</span>
         <a id="hub-link" class="hub-link" hidden rel="noreferrer">GitHub</a>
       </div>
     </header>
 
-    <main>
+    <main id="main-content">
       <section class="workspace dag-workspace" aria-labelledby="dag-title">
         <div class="dag-toolbar">
           <div class="dag-heading">
-            <h2 id="dag-title">Task dependencies</h2>
+            <h2 id="dag-title">Task dependency graph</h2>
             <p>Arrows run from each dependency to the task that depends on it.</p>
           </div>
           <div class="dag-controls">

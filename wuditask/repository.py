@@ -17,8 +17,8 @@ from .util import (
 )
 
 
-HUB_SCHEMA_VERSION = 2
-TOOL_API_VERSION = 3
+HUB_SCHEMA_VERSION = 3
+TOOL_API_VERSION = 4
 
 
 @dataclass(frozen=True)
@@ -287,8 +287,8 @@ class TaskRepository:
                     "message": "must contain only the deletion receipt fields",
                 }
             )
-        if receipt.get("receipt_version") != 1:
-            issues.append({"path": "$.receipt_version", "message": "must equal 1"})
+        if receipt.get("receipt_version") != 2:
+            issues.append({"path": "$.receipt_version", "message": "must equal 2"})
         receipt_id = receipt.get("id")
         if not isinstance(receipt_id, str) or not DELETION_RECEIPT_ID_RE.fullmatch(
             receipt_id
@@ -333,20 +333,15 @@ class TaskRepository:
             )
         deleted_by = receipt.get("deleted_by")
         valid_actor = (
-            isinstance(deleted_by, dict)
-            and set(deleted_by) == {"login", "github_id"}
-            and isinstance(deleted_by.get("login"), str)
-            and bool(deleted_by.get("login", "").strip())
-            and deleted_by.get("login") == deleted_by.get("login", "").strip()
-            and isinstance(deleted_by.get("github_id"), int)
-            and not isinstance(deleted_by.get("github_id"), bool)
-            and deleted_by.get("github_id", 0) > 0
+            isinstance(deleted_by, str)
+            and bool(deleted_by.strip())
+            and deleted_by == deleted_by.strip()
         )
         if not valid_actor:
             issues.append(
                 {
                     "path": "$.deleted_by",
-                    "message": "must contain a GitHub login and positive numeric ID",
+                    "message": "must be a non-empty trimmed GitHub login",
                 }
             )
         if not is_utc_timestamp(receipt.get("deleted_at")):
@@ -363,7 +358,7 @@ class TaskRepository:
             and reason.strip()
             and valid_actor
             and receipt_id
-            != deletion_receipt_id(task_ids, reason, deleted_by["github_id"])
+            != deletion_receipt_id(task_ids, reason, deleted_by)
         ):
             issues.append(
                 {

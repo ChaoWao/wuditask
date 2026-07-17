@@ -2,245 +2,165 @@
 
 ## 目标
 
-WudiTask 解决的是“多个机器上的多个 agent 如何共享任务，并确保同一任务只有一个已确认领取者”。它有意不追求数据库级全局事务：冲突概率应通过一任务一文件降到很低；发生冲突时必须可检测、可重试、不得静默覆盖。
+WudiTask 用 GitHub Issue/PR 承载业务合同，用独立 Git Hub 承载跨仓依赖、多个
+agent runs 和审计归档。它不需要常驻服务，同时避免把 assignment、execution
+和 acceptance 复制成多套事实源。
 
 ## 组件
 
 ```mermaid
 flowchart LR
-  H["Human on GitHub"] --> A["Codex or Claude agent"]
-  A --> S["WudiTask skill"]
-  T["WudiTask tool repository"] --> S
-  T --> P["Python CLI"]
-  S --> P
-  P --> G["Task Hub Git repository"]
-  A --> W["Work repository"]
-  W --> D["GitHub Issue and pull request delivery"]
-  G --> I["Hub fallback Issues"]
-  P --> D
-  G --> X["GitHub Actions"]
-  X --> V["Validate and build snapshot"]
-  V --> Q["Read-only GitHub Pages"]
-  H --> Q
+  U["Human or agent"] --> C["WudiTask CLI"]
+  C --> G["Canonical GitHub Issue or PR"]
+  C --> H["Task Hub Git repository"]
+  H --> P["Read-only GitHub Pages"]
+  G --> P
+  C --> W["Execution repository"]
 ```
+
+### Canonical GitHub source
+
+GitHub 保存 title/body、acceptance、assignees、PR author、reviews、checks 与交付
+终态。owner 是实时派生值：
+
+- PR source：author + PR assignees；
+- Issue source：Issue assignees + closing-linked PR authors；普通 mention 不产生
+  owner。
+
+Hub Issue 可以作为 fallback canonical source；不存在 text source。
 
 ### Task Hub
 
-Task Hub 是 coordination 状态的事实源；GitHub Issue/PR 是 delivery 状态的
-事实源。Hub Git tree 包含：
+Hub schema v3 / tool API v4 的 task 文件只保存 repo、source、creator login、
+priority、created_at、dependencies 和 `active_agents`。一任务一文件让不同 task
+写入尽量不冲突。archive 保存 completion/evidence/participants，deletion receipt
+永久保留显式删除的 ID。
 
-- `hub.json`：task schema v2 与 tool API v3 的严格版本契约。
-- `data/open/` 与 `data/archive/`：当前任务数据。
-- `data/deletions/`：误建 archive 的持久删除回执和已保留 ID。
-- `.github/workflows/pages.yml`：用固定工具版本校验、构建与部署。
+### Agent access
 
-Hub 的 GitHub Issues 是 canonical narrative 的 fallback tracker，属于服务端
-元数据，不进入 Git tree，也不会与 task-data push 竞争。
+安装配置只记录工具 clone 与独立 Hub remote/branch。长期 bare cache 按
+remote+branch 分桶，每次命令创建独立 worktree，并以本机 operation lock 防止
+清理仍活跃的进程。十二个 skill 通过符号链接同时注册给 Codex 和 Claude。
 
-工具仓保存 CLI、skills、dashboard 源码和测试；
-`schemas/task.schema.json` 与 `schemas/deletion-receipt.schema.json` 分别公开
-task v2 和 deletion receipt v1 的机器契约。安装配置 schema v2
-分别记录 `tool_path/tool_remote/tool_branch` 与
-`hub_remote/hub_branch`。CLI 不从工具仓的 origin 推断 Hub；Hub 任务提交
-也不会推进工具仓 HEAD。
+### Pages
 
-两套 Git 历史采用不同策略：
+Pages workflow checkout Hub 和固定工具 SHA，先 validate 再构建 snapshot v3。
+网页只读，展示 owners 和 active-agent logins，但不发布 run_id。source body、
+completion evidence 和 private delivery 元数据都属于可能公开的数据。
 
-| 仓库 | 默认写入 | 历史改写 |
-| --- | --- | --- |
-| Task Hub | 普通 fast-forward push | 服务端禁止 non-fast-forward 和 force push |
-| WudiTask 工具仓 | 普通 push | 明确维护时允许带精确旧 OID 的 `--force-with-lease` |
+## Ownership 与 execution 分离
 
-工具仓的例外只用于代码历史维护，不进入任务并发协议，也不能以 remote 名称、
-本地 clone 或其他配置间接套用到 Task Hub。
-
-`hub.json` 只允许当前工具认识的精确字段和值。缺失、额外字段或版本不匹配
-都会在读写前失败；系统没有旧 Hub fallback 或隐式迁移路径。
-
-远端 Hub 的本地副本只是可删除 cache。CLI 按 remote 和 branch 的哈希在
-`${XDG_CACHE_HOME:-$HOME/.cache}/wuditask/hubs/` 保存 bare repository；配置
-仍只记录远端，不记录 cache 路径。每条命令 fetch 最新远端 commit，并在唯一
-operation worktree 中读取或修改。命令结束后删除 worktree，Git objects 留在
-cache 中供后续命令复用。bare cache 首次初始化在同级 staging 目录完成，再
-原子 rename 到最终 hash 路径，初始化中断不会留下被误认成有效 cache 的半成品。
-
-### Work repository
-
-工作仓库不保存 WudiTask 锁文件，也不需要安装 SDK。agent 在工作仓库中读取 origin，以 `owner/name` 匹配 Task Hub 中的任务，然后在该工作仓库完成代码与验证。
-
-### GitHub Pages
-
-Pages 是派生视图，不是写入 API。Hub Actions checkout 一个固定的工具完整
-commit SHA，使用该版本的 validator 与 `site/` 从已提交 JSON 构建
-`snapshot.json`。同一 artifact 包含任务列表、由 Markdown 构建的安装说明和
-浏览器端依赖 DAG；DAG 只读取 snapshot，不产生第二份任务事实源。`_site` 只
-作为 artifact 上传，不提交回 Task Hub。即使 Pages 暂时不可用，CLI 与 Git
-协议仍可运行。
-
-## Task Hub 普通 push 的乐观并发
-
-每个远端写命令执行同一套事务：
-
-1. 在对应的持久 bare cache 中 fetch 配置的 `hub_remote/hub_branch`。
-2. 从 fetch 得到的精确 commit 创建唯一的 detached operation worktree。
-3. 在 worktree 中重新检查 schema、claim 和依赖。
-4. 只修改目标任务文件，并用当前 human identity 创建 Git commit。
-5. 执行普通 `git push`，显式关闭 force、force-with-lease、mirror 与
-   follow-tags，只推进配置的 Hub branch。
-6. push 成功后返回 `sync.confirmed=true`；工具 clone 不执行 refresh。
-7. 删除 operation worktree；bare cache 继续保留。
-8. 如果因 non-fast-forward 被拒绝，从第 1 步重新 fetch、重新判断并重放。
+`assign/unassign` 是显式 GitHub assignee 操作；`release` 只普通 push Hub。
+`execute` 自动选择 unowned task，或显式选择当前 login 尚非 owner 的 task 时，
+先完成 GitHub self-assignment，再独立启动 Hub run。
+两者没有跨仓原子事务，也不假装有：
 
 ```mermaid
 sequenceDiagram
-  participant A as Agent A
-  participant B as Agent B
-  participant C as Local bare cache
-  participant O as Git origin
-  A->>O: fetch latest into cache
-  B->>O: fetch latest into cache
-  C-->>A: detached worktree A
-  C-->>B: detached worktree B
-  A->>A: claim task T
-  B->>B: claim task T
-  A->>O: ordinary push
-  O-->>A: accepted
-  B->>O: ordinary push
-  O-->>B: rejected, fetch first
-  B->>O: fetch latest and create a new worktree
-  O-->>B: T already has claim
-  B-->>B: return claim_conflict; do not work
+  participant A as Agent
+  participant G as GitHub
+  participant H as Hub
+  A->>G: read owners and delivery
+  opt task is unowned
+    A->>G: self-assign current login
+    G-->>A: confirmed owner
+  end
+  A->>H: add {login, run_id} by ordinary push
+  H-->>A: confirmed remote commit
+  A->>G: re-read owners and delivery
+  alt still executable
+    A-->>A: work authorized
+  else ownership or delivery changed
+    A->>H: remove exact {login, run_id}
+    A-->>A: fail closed
+  end
+  Note over A,G: confirmed self-assignment is never rolled back
 ```
 
-同一 cache bucket 的跨进程锁只覆盖初始化、fetch 和 worktree add/remove；任务
-判断、commit 与 push 不持锁，因此同机 agent 仍然按远端普通 push 乐观竞争。
-不同 operation 也不写共享 repository 的 `user.name/user.email`，commit identity
-只通过该次 Git 命令传入。每个 operation 在整个生命周期持有唯一 lease；后续
-命令只清理能够非阻塞取得 lease 的 orphan，因此进程崩溃后的 checkout 会被
-回收，同时不会误删仍在运行的并发 worktree。
+无 ID execute 先选 assigned-to-self idle task，再选 unowned task。只由其他人拥有
+的任务不会被自动采用；显式 task ID 则允许先添加当前 login 为 co-owner，再走
+self-assignment phase。若 Hub
+start 失败，GitHub assignment 保留并明确报告未启动。unassign 在目标 login
+active 时拒绝；release 即使 GitHub 不可用也能清除自己的精确 run。
 
-Hub push 不依赖环境中的 Git 默认值：命令同时覆盖
-`remote.origin.mirror=false`、`push.followTags=false`，并传入
-`--no-force`、`--no-force-with-lease`、`--no-mirror` 与
-`--no-follow-tags`。因此全局或 cache-local Git 配置不能把一次单分支普通
-push 隐式扩大成 mirror、force 更新或额外 tag 写入。push 直接使用配置的
-`hub_remote`，不通过 remote 名 `origin`，因此 `remote.origin.pushurl` 也不能
-把一次已确认任务写入重定向到其他仓库。
+## Active-agent 集合并发
 
-### Push 失败不总等于“没抢到”
+每项为 `{login,run_id}`。login 不区分大小写且最多一项；不同 login 可以同时
+存在。run_id 是一次执行 generation，解决同一 login 的 ABA：旧 release/archive
+不能作用于后来启动的新 run。
 
-non-fast-forward 只说明远端变了，可能是另一台机器修改了完全不同的任务。WudiTask 会自动重试：
+远端写流程：
 
-- 若目标任务仍为空：重放本次修改并再次普通 push。
-- 若目标任务已被他人领取：返回 `claim_conflict`，确认没有抢到。
-- 若只是其他任务变化：通常第二次 push 会成功。
-- 若网络、认证或服务端状态不明确：返回 `push_status_unknown`，fail closed；agent 不得开始工作，应重试同一命令确认远端状态。
+1. fetch Hub 默认分支；
+2. 从精确 commit 建 operation worktree；
+3. validate schema、dependencies 与目标 precondition；
+4. 仅修改目标 task path；
+5. 普通 push；non-fast-forward 时从新快照重放完整 operation；
+6. 远端读取验证 task 的完整 postcondition。
 
-因此真正的开工条件不是“本地 JSON 已改”或“第一次 push 没报错”，而是命令返回：
+不同 login 同时 execute 同一 task 时，两次操作是集合 add；后 push 的一方重放
+后保留前一项。相同 login 同时 execute 时只能有一项，另一方得到
+`active_agent_conflict`。release 只删除 matching login/run_id，不覆盖其他 add。
 
-```json
-{
-  "ok": true,
-  "confirmed": true,
-  "sync": {
-    "confirmed": true
-  }
-}
-```
+Hub push 失败不必然表示未接受。CLI 用远端 postcondition 区分已确认、未提交和
+未知；未知时 fail closed，调用方用相同 run_id 重试，不能生成第二个 run。
 
-## 为什么一任务一文件
+## Dependencies 与 archive
 
-两个 agent 领取不同任务时会修改两个路径。第一次 push 后，第二次虽然会遇到 branch head 变化，但从新快照重放时不会产生内容冲突。只有同时操作同一个任务才会竞争同一路径与 claim 条件。
+dependencies 使用 WudiTask ID。open、missing、failed、cancelled 或 cyclic
+dependency 都阻止 execute；只有 archive `done` 且 completion 合法才解锁下游。
 
-archive 是同一事务中的 rename：`data/open/<id>.json` 变为
-`data/archive/<year>/<id>.json`。正常 outcome 保留在当前树中。显式 delete
-只清理误建 archive：完整批次预检后由一个 commit 删除多个任务路径，
-并写入 `data/deletions/<receipt-id>.json`。回执记录排序后的完整批次
-ID、reason、GitHub identity 和 UTC 时间，也使已删除 ID 永久保留。
-确定性 receipt ID 由排序后的 ID、去除首尾空白的 reason 和不可变
-GitHub numeric ID 派生，因此同一操作可幂等重试，不同 actor 或 reason
-不会被误认为当前操作。多文件原子性来自远端 Git commit，因此 delete
-不支持 `--local`。
+acceptance 只在 source。archive done 实时确认 Issue completed 或 PR merged，
+要求至少一条 evidence 和 caller matching run_id。一个 Hub commit 把 open 文件
+移动到 archive、清空 active_agents，并把当时所有 login/run_id 保存为
+completion participants。failed/cancelled 保留历史但不解锁依赖；若存在 active
+agents，同样要求 caller 的 matching login/run_id 并清空全集。若没有 active
+agent，则只有 authenticated `created_by` 可以对已明确终态的任务归档，且必须
+省略 run_id；旧 run_id 会被拒绝而不是忽略，participants 为空。这允许未认领或
+已 release 的取消/失败任务结束生命周期，同时不允许其他 login 借终态关闭任务。
+
+显式 delete 是 archive rename 以外的例外：完整批次预检后，一个 commit 删除
+目标并写 deterministic receipt。receipt 覆盖的 ID 永久保留，阻止 ABA 重建。
 
 ## 原子性边界
 
-系统不承诺：
-
-- 跨 GitHub 仓库的原子提交。
-- 工作仓库代码与 Task Hub archive 的两阶段提交。
-- GitHub 服务不可达时的离线领取。
-- 网络中断后立即知道 push 是否已被服务端接受。
-
-### GitHub delivery 与 Hub claim
-
-`execute` 在 Hub 中取得强唯一 lease，并以 canonical Issue/PR 的实时状态作为
-外部 guard。未指派 Issue 的流程是：读取 GitHub → 普通 push claim → 指派当前
-用户 → 再读 GitHub；已有 assignee 或 PR source 也必须在 push 后重读。指派失败
-或二次读取出现其他 owner 时，CLI 使用本次 claim token 补偿 release；无法确认
-GitHub cleanup 时保留 lease 并要求 reconcile。不存在跨仓原子提交。
-
-`release` 反向执行：对 Issue 先移除当前 assignee 并重读，再普通 push 清 lease；
-Hub push 未确认时保留 locked/unknown 状态并要求重试或 reconcile，避免猜测
-跨仓结果。当前用户仍拥有 active closing PR 时拒绝宣称任务已经回队列。local
-mode 从不执行这些 GitHub mutation。
-
-`archive done` 也实时读取 delivery：只有 canonical Issue 当前 completed（通常
-由 closing PR merge 触发），或 canonical PR merged，才进入 WudiTask 验收。
-Issue 一旦 open/reopened 就仍是 active，即使保留历史 merged closing PR。GitHub
-完成不自动产生 evidence，也不自动解除依赖。
-
 系统承诺：
 
-- 不 force-push Task Hub。
-- 未确认 claim 时 agent 不开工。
-- 每次远端重试都重新检查目标任务，而不是盲目重放旧文本。
-- human authorization 使用不可变 GitHub numeric ID；login 改名时刷新显示字段。
-- archive done 必须有完整验收证据。
-- failed/cancelled 不解除依赖。
-- delete 只接受 archived record，并阻止会产生悬空引用的批次外反向依赖。
-- delete 只在确定性回执与本次 actor/reason/完整 ID 批次匹配，且所有
-  目标记录都已不存在时确认；不把单独的“路径不存在”当成成功。
-- delete 回执永久保留所有目标 ID，阻止删除后重建同 ID 造成 ABA。
-- non-fast-forward 后从新快照重新运行全部 target 与 reverse-dependency guards。
-- 数据格式、依赖图与 Pages 构建在 CI 中统一验证。
+- Hub 永不 force-push；
+- 每次重试从新快照重放 target/dependency/run guards；
+- 一个 agent 的操作不覆盖其他 login 的 entry；
+- active agents 存在时，stale run_id 不能 release/archive 新 run；
+- archive done 要求 terminal GitHub delivery 与 evidence；
+- 无 active agent 的 failed/cancelled archive 只允许 task creator；
+- schema、DAG 和 Pages 在 CI 中统一验证。
 
-这是有意选择的低复杂度模型：允许极低概率、可见且可恢复的冲突，不引入常驻协调服务器。
+系统不承诺：
 
-## 分支配置
+- GitHub assignment 与 Hub execution 的跨仓原子提交；
+- 工作仓代码提交与 Hub archive 的两阶段提交；
+- GitHub 不可达时的新 execute 或 done archive；
+- 网络中断后立即知道 push 是否被服务端接受。
 
-Task Hub 的默认分支应允许被授权参与者直接普通 push，因为 claim 的确认点就是该 push。推荐分支规则：
+## 分支与版本
 
-- 禁止 force push。
-- 禁止删除默认分支。
-- 限制谁可以 push。
-- 启用 secret scanning 与审计（组织能力允许时）。
-- 不要求每个 task claim 走 pull request。
+Hub 默认分支需要授权参与者普通 push，以 Hub commit 作为 agent-set 和 archive
+确认点。禁止 force push、默认分支删除与 mirror push；若组织强制所有 Hub 写入
+走 PR，本协议不能提供低延迟协调，应使用服务端事务系统。
 
-如果组织策略强制所有修改通过 PR，则本协议不能提供低延迟唯一领取；应改用 GitHub Issues/Projects 的服务端原子 API 或专用协调服务。
+工具仓与 Hub 是不同安全域。工具维护通常普通 push；明确改写 agent-owned tool
+branch 时才允许带已观察旧 OID 的精确 `--force-with-lease`。该权限绝不传播给
+Hub。
 
-这些分支规则只约束 Task Hub。工具仓是可重新发布的代码，默认仍应普通 push，
-但维护者可以在明确审查改写范围后使用
-`--force-with-lease=refs/heads/<branch>:<observed-oid>`。工具仓规则可以保留
-分支删除保护，但不应启用禁止 non-fast-forward 的规则。lease 不匹配时必须
-停止并检查新提交，不能自动更新 expected OID 后重试。比较工具仓与 Hub 时
-必须使用 canonical 仓库身份，不能把同一 GitHub 仓库的 SSH/HTTPS URL 当成
-不同仓库。若配置的工具分支被改写，现有安装的普通 selfupdate 保持
-fail-closed；改写远端历史不隐含 reset 本地安装的授权。
+v3/API4 是无兼容 cutover。Hub 必须在一个 commit 中迁移 manifest、所有 task
+和 Pages pinned tool SHA；旧工具随后应拒绝 Hub，而不是猜测或双写旧字段。
 
 ## 可用性与隐私
 
-Git origin 是协调面，GitHub API 是 delivery guard。任一短时不可用时新 claim
-fail closed；GitHub-backed done archive 也等待 delivery 恢复。已确认 lease 的
-本地实施可以继续。
+Git origin 是 coordination plane，GitHub API 是 owner/delivery plane。GitHub
+unavailable 时 read view 显示 unknown，新 execute 和任何 archive fail closed；
+已知 run 的 release 只依赖 Hub，仍可执行。
 
-私有 Task Hub 可以限制 JSON 访问，但 Pages 的访问级别必须单独判断。跨仓私有
-source 需要 Hub workflow 的只读 token；没有权限时 delivery 显示 unavailable。
-默认把 title、goal、context、claim identity、evidence、canonical source
-repo/URL、assignees、closing PR author/URL、review/check 摘要、delivery 时间和
-查询错误都视为可能被 Pages 读者看到。跨仓私有 token 至少需要 repository
-metadata、Issues、pull requests、checks 与 commit statuses 的只读权限；公开
-Pages 必须脱敏，敏感任务应使用真正受限的 Pages。
-
-删除当前 archive 会在当前树中保留回执，且不会擦除 Git history、
-旧 clone 或已发布 Pages artifact，也不会修改 canonical GitHub source；它只能
-清理当前协调快照中的误建任务记录，不是 privacy/secret erasure。
+private source 需要 Hub workflow 的最小只读 token。Pages snapshot 可包含 source
+body、owners、linked PR、reviews/checks、active logins、completion evidence 与
+query errors；run_id 只保留在 Hub JSON/CLI，不进入 Pages。不要把 Pages 误当成
+天然私有站点。

@@ -2,74 +2,181 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import subprocess
 import sys
 import tempfile
 import unittest
 from pathlib import Path
+from typing import Any
 
 from wuditask.repository import TaskRepository
 from wuditask.util import atomic_write_json
 
-from tests.helpers import add_task, git, make_hub_origin
+from tests.helpers import RUN_ID, add_task, git, make_hub_origin
 
 ROOT = Path(__file__).resolve().parents[1]
 TOOL = ROOT / "tools" / "wuditask.py"
+TASK_A = "WDT-20260711T120000Z-A1B2C3"
+TASK_B = "WDT-20260711T120001Z-B2C3D4"
+TASK_C = "WDT-20260711T120002Z-C3D4E5"
+RUN_ID_RE = re.compile(r"^WDX-[0-9A-F]{24}$")
 
 
-class CliTests(unittest.TestCase):
-    @staticmethod
-    def fake_github(
-        base: Path, *, assignees: list[str] | None = None
-    ) -> tuple[dict[str, str], Path, Path]:
+class FakeGitHub:
+    """Small stateful gh replacement covering the CLI's Issue/PR contract."""
+
+    def __init__(self, base: Path, *, login: str = "alice") -> None:
         fake_bin = base / "fake-bin"
         fake_bin.mkdir()
-        state = base / "github-state.json"
-        log = base / "github-calls.log"
-        atomic_write_json(state, {"assignees": assignees or []})
-        fake_gh = fake_bin / "gh"
-        fake_gh.write_text(
+        self.state_path = base / "github-state.json"
+        self.log_path = base / "github-calls.log"
+        atomic_write_json(
+            self.state_path,
+            {"login": login, "issues": {}, "pull_requests": {}},
+        )
+        executable = fake_bin / "gh"
+        executable.write_text(
             "#!/usr/bin/env python3\n"
             "import json, os, pathlib, sys\n"
             "args = sys.argv[1:]\n"
             "state_path = pathlib.Path(os.environ['FAKE_GH_STATE'])\n"
             "log_path = pathlib.Path(os.environ['FAKE_GH_LOG'])\n"
             "state = json.loads(state_path.read_text())\n"
+            "with log_path.open('a') as handle:\n"
+            "    handle.write(json.dumps(args) + '\\n')\n"
             "if args[:2] == ['api', 'user']:\n"
-            "    print(json.dumps({'login': 'alice', 'id': 1001}))\n"
-            "elif args[:2] == ['issue', 'view']:\n"
-            "    if os.environ.get('FAKE_GH_FAIL_VIEW') == '1':\n"
-            "        print('not found', file=sys.stderr)\n"
-            "        raise SystemExit(1)\n"
-            "    print(json.dumps({'state': 'OPEN', 'stateReason': None, "
-            "'url': 'https://github.com/acme/service/issues/42', "
-            "'assignees': [{'login': x} for x in state['assignees']], "
-            "'closedByPullRequestsReferences': [], "
-            "'updatedAt': '2026-07-16T10:00:00Z'}))\n"
-            "elif args[:2] == ['issue', 'edit']:\n"
+            "    print(json.dumps({'login': state['login']}))\n"
+            "    raise SystemExit(0)\n"
+            "if os.environ.get('FAKE_GH_FAIL_VIEW') == '1' and len(args) > 1 and args[1] == 'view':\n"
+            "    print('not found', file=sys.stderr)\n"
+            "    raise SystemExit(1)\n"
+            "if len(args) < 3 or args[0] not in {'issue', 'pr'}:\n"
+            "    print('unsupported fake gh command: ' + ' '.join(args), file=sys.stderr)\n"
+            "    raise SystemExit(1)\n"
+            "kind, action, number = args[0], args[1], args[2]\n"
+            "repo = args[args.index('--repo') + 1]\n"
+            "bucket = state['issues'] if kind == 'issue' else state['pull_requests']\n"
+            "item = bucket.get(number)\n"
+            "if item is None:\n"
+            "    print('not found', file=sys.stderr)\n"
+            "    raise SystemExit(1)\n"
+            "if action == 'view' and kind == 'issue':\n"
+            "    payload = dict(item)\n"
+            "    payload['url'] = f'https://github.com/{repo}/issues/{number}'\n"
+            "    payload['assignees'] = [{'login': login} for login in item['assignees']]\n"
+            "    payload['closedByPullRequestsReferences'] = [\n"
+            "        {'number': pr, 'url': f'https://github.com/{repo}/pull/{pr}',\n"
+            "         'repository': {'nameWithOwner': repo}} for pr in item.get('prs', [])\n"
+            "    ]\n"
+            "    payload.pop('prs', None)\n"
+            "    print(json.dumps(payload))\n"
+            "    raise SystemExit(0)\n"
+            "if action == 'view' and kind == 'pr':\n"
+            "    payload = dict(item)\n"
+            "    author = item.get('author')\n"
+            "    payload['author'] = {'login': author} if author else None\n"
+            "    payload['assignees'] = [{'login': login} for login in item['assignees']]\n"
+            "    payload['statusCheckRollup'] = item.get('checks', [])\n"
+            "    payload.pop('checks', None)\n"
+            "    print(json.dumps(payload))\n"
+            "    raise SystemExit(0)\n"
+            "if action == 'edit':\n"
             "    if '--add-assignee' in args:\n"
             "        login = args[args.index('--add-assignee') + 1]\n"
-            "        if login not in state['assignees']: state['assignees'].append(login)\n"
+            "        if login not in item['assignees']:\n"
+            "            item['assignees'].append(login)\n"
             "    elif '--remove-assignee' in args:\n"
             "        login = args[args.index('--remove-assignee') + 1]\n"
-            "        state['assignees'] = [x for x in state['assignees'] if x != login]\n"
+            "        item['assignees'] = [value for value in item['assignees'] if value != login]\n"
+            "    else:\n"
+            "        print('unsupported edit', file=sys.stderr)\n"
+            "        raise SystemExit(1)\n"
             "    state_path.write_text(json.dumps(state))\n"
-            "    with log_path.open('a') as handle: handle.write(' '.join(args) + '\\n')\n"
-            "else:\n"
-            "    print('unsupported fake gh command', file=sys.stderr)\n"
-            "    raise SystemExit(1)\n",
+            "    raise SystemExit(0)\n"
+            "print('unsupported fake gh command: ' + ' '.join(args), file=sys.stderr)\n"
+            "raise SystemExit(1)\n",
             encoding="utf-8",
         )
-        fake_gh.chmod(0o755)
-        environment = {
+        executable.chmod(0o755)
+        self.environment = {
             **os.environ,
             "PATH": f"{fake_bin}{os.pathsep}{os.environ['PATH']}",
-            "FAKE_GH_STATE": str(state),
-            "FAKE_GH_LOG": str(log),
+            "FAKE_GH_STATE": str(self.state_path),
+            "FAKE_GH_LOG": str(self.log_path),
         }
-        return environment, state, log
 
-    def run_cli(
+    def _state(self) -> dict[str, Any]:
+        return json.loads(self.state_path.read_text(encoding="utf-8"))
+
+    def issue(
+        self,
+        number: int,
+        *,
+        assignees: list[str] | None = None,
+        prs: list[int] | None = None,
+        state: str = "OPEN",
+        state_reason: str | None = None,
+        title: str | None = None,
+        body: str = "Goal and acceptance live here.",
+    ) -> None:
+        payload = self._state()
+        payload["issues"][str(number)] = {
+            "title": title or f"Issue {number}",
+            "body": body,
+            "state": state,
+            "stateReason": state_reason,
+            "assignees": assignees or [],
+            "prs": prs or [],
+            "updatedAt": "2026-07-16T10:00:00Z",
+        }
+        atomic_write_json(self.state_path, payload)
+
+    def pull_request(
+        self,
+        number: int,
+        *,
+        author: str = "carol",
+        assignees: list[str] | None = None,
+        state: str = "OPEN",
+        draft: bool = False,
+        merged_at: str | None = None,
+        review_decision: str | None = "REVIEW_REQUIRED",
+        merge_state: str = "BLOCKED",
+        checks: list[dict[str, str]] | None = None,
+        title: str | None = None,
+    ) -> None:
+        payload = self._state()
+        payload["pull_requests"][str(number)] = {
+            "title": title or f"PR {number}",
+            "body": "Implementation and acceptance evidence.",
+            "author": author,
+            "assignees": assignees or [],
+            "state": state,
+            "isDraft": draft,
+            "mergedAt": merged_at,
+            "reviewDecision": review_decision,
+            "mergeStateStatus": merge_state,
+            "checks": checks or [],
+            "updatedAt": "2026-07-16T11:00:00Z",
+        }
+        atomic_write_json(self.state_path, payload)
+
+    def assignees(self, kind: str, number: int) -> list[str]:
+        bucket = "issues" if kind == "issue" else "pull_requests"
+        return self._state()[bucket][str(number)]["assignees"]
+
+    def calls(self) -> list[list[str]]:
+        if not self.log_path.exists():
+            return []
+        return [
+            json.loads(line)
+            for line in self.log_path.read_text(encoding="utf-8").splitlines()
+        ]
+
+
+class CliTests(unittest.TestCase):
+    def run_local(
         self,
         hub: Path,
         *arguments: str,
@@ -84,7 +191,7 @@ class CliTests(unittest.TestCase):
                 "--local",
                 "--json",
                 "--actor",
-                "alice:1001",
+                "alice",
                 *arguments,
             ],
             cwd=ROOT,
@@ -94,336 +201,599 @@ class CliTests(unittest.TestCase):
             text=True,
         )
 
-    def test_json_lifecycle(self) -> None:
+    def run_remote(
+        self,
+        environment: dict[str, str],
+        *arguments: str,
+    ) -> subprocess.CompletedProcess[str]:
+        return subprocess.run(
+            [sys.executable, str(TOOL), "--json", *arguments],
+            cwd=ROOT,
+            env=environment,
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+
+    @staticmethod
+    def seed_task(
+        repository: TaskRepository,
+        task_id: str,
+        *,
+        number: int,
+        priority: str = "P2",
+        source_kind: str = "github_issue",
+        active_agents: list[dict[str, str]] | None = None,
+        dependencies: list[str] | None = None,
+    ) -> dict[str, Any]:
+        task = add_task(
+            repository,
+            task_id,
+            number=number,
+            dependencies=dependencies,
+        )
+        task["priority"] = priority
+        task["source"]["kind"] = source_kind
+        task["active_agents"] = active_agents or []
+        atomic_write_json(repository.open_dir / f"{task_id}.json", task)
+        return task
+
+    @staticmethod
+    def configure_remote(base: Path, github: FakeGitHub) -> tuple[Path, Path, dict[str, str]]:
+        home = base / "home"
+        home.mkdir()
+        origin = make_hub_origin(base)
+        tool_remote = git(["remote", "get-url", "origin"], ROOT).stdout.strip()
+        tool_branch = git(["branch", "--show-current"], ROOT).stdout.strip()
+        atomic_write_json(
+            home / ".wuditask" / "config.json",
+            {
+                "schema_version": 2,
+                "tool_path": str(ROOT),
+                "tool_remote": tool_remote,
+                "tool_branch": tool_branch,
+                "hub_remote": str(origin),
+                "hub_branch": "main",
+                "installed_at": "2026-07-11T12:00:00Z",
+            },
+        )
+        environment = {
+            **github.environment,
+            "HOME": str(home),
+            "XDG_CACHE_HOME": str(base / "cache"),
+        }
+        return origin, base / "hub-seed", environment
+
+    @staticmethod
+    def publish_seed(seed: Path, message: str = "seed tasks") -> None:
+        git(["add", "data"], seed)
+        git(["commit", "-m", message], seed)
+        git(["push", "origin", "main"], seed)
+
+    def test_add_accepts_only_canonical_github_issue_or_pr(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             hub = Path(temporary)
             TaskRepository(hub).initialize()
-            added = self.run_cli(
+            github = FakeGitHub(hub)
+            github.issue(42)
+            github.pull_request(43)
+
+            issue = self.run_local(
                 hub,
                 "add",
                 "--id",
-                "WDT-20260711T120000Z-A1B2C3",
+                TASK_A,
+                "--repo",
+                "acme/service",
+                "--source",
+                "https://github.com/acme/service/issues/42",
+                environment=github.environment,
+            )
+            pull = self.run_local(
+                hub,
+                "add",
+                "--id",
+                TASK_B,
+                "--repo",
+                "acme/service",
+                "--source",
+                "https://github.com/acme/service/pull/43",
+                environment=github.environment,
+            )
+
+            self.assertEqual(0, issue.returncode, issue.stdout + issue.stderr)
+            self.assertEqual(0, pull.returncode, pull.stdout + pull.stderr)
+            issue_task = json.loads(issue.stdout)["task"]
+            pull_task = json.loads(pull.stdout)["task"]
+            self.assertEqual("github_issue", issue_task["source"]["kind"])
+            self.assertEqual("github_pull_request", pull_task["source"]["kind"])
+            self.assertEqual("alice", issue_task["created_by"])
+            self.assertEqual(
+                {
+                    "schema_version",
+                    "id",
+                    "repo",
+                    "source",
+                    "created_by",
+                    "priority",
+                    "created_at",
+                    "dependencies",
+                    "active_agents",
+                },
+                set(issue_task),
+            )
+
+            text = self.run_local(
+                hub,
+                "add",
                 "--repo",
                 "acme/service",
                 "--text-source-reason",
-                "CLI lifecycle fixture has no external narrative.",
-                "--title",
-                "CLI task",
-                "--goal",
-                "Exercise the CLI.",
-                "--accept",
-                "The lifecycle passes.",
-                "--verify",
-                "command::python3 -m unittest",
+                "No source",
+                environment=github.environment,
             )
-            self.assertEqual(0, added.returncode, added.stderr)
-            add_payload = json.loads(added.stdout)
-            self.assertTrue(add_payload["ok"])
 
-            claimed = self.run_cli(
-                hub,
-                "execute",
-                "WDT-20260711T120000Z-A1B2C3",
-                "--repo",
-                "acme/service",
-            )
-            self.assertEqual(0, claimed.returncode, claimed.stderr)
-            claim_payload = json.loads(claimed.stdout)
-            self.assertTrue(claim_payload["sync"]["confirmed"])
+        self.assertEqual(2, text.returncode)
+        self.assertIn("unrecognized arguments", text.stderr)
 
-            archived = self.run_cli(
-                hub,
-                "archive",
-                "WDT-20260711T120000Z-A1B2C3",
-                "--result",
-                "CLI lifecycle passed.",
-                "--evidence",
-                "AC-1=unittest passed",
-            )
-            self.assertEqual(0, archived.returncode, archived.stderr)
-            self.assertTrue(json.loads(archived.stdout)["confirmed"])
-
-            deleted = self.run_cli(
-                hub,
-                "delete",
-                "WDT-20260711T120000Z-A1B2C3",
-                "--reason",
-                "The lifecycle fixture is not real work.",
-            )
-            self.assertNotEqual(0, deleted.returncode)
-            delete_payload = json.loads(deleted.stdout)
-            self.assertFalse(delete_payload["ok"])
-            self.assertEqual(
-                "delete_remote_hub_required",
-                delete_payload["error"]["code"],
-            )
-            self.assertIn(
-                "WDT-20260711T120000Z-A1B2C3",
-                TaskRepository(hub).load_index().archived,
-            )
-            self.assertEqual({}, TaskRepository(hub).load_deletion_receipts())
-
-    def test_add_parses_hub_fallback_source_separately_from_execution_repo(
-        self,
-    ) -> None:
+    def test_add_rejects_unreadable_source_without_creating_text_fallback(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             hub = Path(temporary)
             TaskRepository(hub).initialize()
-            git(["init", "-b", "main"], hub)
-            git(
-                [
-                    "remote",
-                    "add",
-                    "origin",
-                    "https://github.com/acme/wuditask-hub.git",
-                ],
-                hub,
-            )
-            environment, _, _ = self.fake_github(hub)
-            added = self.run_cli(
+            github = FakeGitHub(hub)
+            environment = {**github.environment, "FAKE_GH_FAIL_VIEW": "1"}
+            result = self.run_local(
                 hub,
                 "add",
                 "--id",
-                "WDT-20260711T120000Z-A1B2C3",
+                TASK_A,
                 "--repo",
                 "acme/service",
-                "--source",
-                "https://github.com/acme/wuditask-hub/issues/42",
-                "--source-fallback-reason",
-                "The execution repository has Issues disabled.",
-                "--title",
-                "Fallback task",
-                "--goal",
-                "Exercise structured fallback source parsing.",
-                "--accept",
-                "The task is recorded.",
-                environment=environment,
-            )
-
-        self.assertEqual(0, added.returncode, added.stdout)
-        source = json.loads(added.stdout)["task"]["source"]
-        self.assertEqual(
-            {
-                "kind": "github_issue_fallback",
-                "repo": "acme/wuditask-hub",
-                "number": 42,
-                "fallback_reason": "The execution repository has Issues disabled.",
-            },
-            source,
-        )
-
-    def test_malformed_source_spec_returns_structured_json_error(self) -> None:
-        with tempfile.TemporaryDirectory() as temporary:
-            hub = Path(temporary)
-            TaskRepository(hub).initialize()
-            spec_path = hub / "malformed.json"
-            atomic_write_json(
-                spec_path,
-                {
-                    "title": "Malformed source",
-                    "repo": "acme/service",
-                    "source": {"kind": "github_issue", "number": 42},
-                    "goal": "Return a structured validation error.",
-                    "acceptance_criteria": ["The error is structured."],
-                },
-            )
-            result = self.run_cli(hub, "add", "--spec", str(spec_path))
-
-        self.assertEqual(2, result.returncode, result.stderr)
-        self.assertEqual(
-            "invalid_task_data", json.loads(result.stdout)["error"]["code"]
-        )
-        self.assertNotIn("Traceback", result.stderr)
-
-    def test_add_rejects_wrong_or_unreadable_github_source(self) -> None:
-        with tempfile.TemporaryDirectory() as temporary:
-            hub = Path(temporary)
-            TaskRepository(hub).initialize()
-            git(["init", "-b", "main"], hub)
-            git(
-                [
-                    "remote",
-                    "add",
-                    "origin",
-                    "https://github.com/acme/wuditask-hub.git",
-                ],
-                hub,
-            )
-            environment, _, _ = self.fake_github(hub)
-            common = (
-                "--id",
-                "WDT-20260711T120000Z-A1B2C3",
-                "--repo",
-                "acme/service",
-                "--title",
-                "Canonical source validation",
-                "--goal",
-                "Reject invalid canonical sources.",
-                "--accept",
-                "The invalid source is rejected.",
-            )
-            wrong_hub = self.run_cli(
-                hub,
-                "add",
-                *common,
-                "--source",
-                "https://github.com/acme/other-hub/issues/42",
-                "--source-fallback-reason",
-                "The execution repository cannot host Issues.",
-                environment=environment,
-            )
-            unavailable_environment = {**environment, "FAKE_GH_FAIL_VIEW": "1"}
-            unavailable = self.run_cli(
-                hub,
-                "add",
-                *common,
                 "--source",
                 "https://github.com/acme/service/issues/404",
-                environment=unavailable_environment,
+                environment=environment,
             )
 
-        self.assertEqual(
-            "invalid_fallback_repository",
-            json.loads(wrong_hub.stdout)["error"]["code"],
-        )
-        self.assertEqual(
-            "github_source_unavailable",
-            json.loads(unavailable.stdout)["error"]["code"],
-        )
+            self.assertNotEqual(0, result.returncode)
+            self.assertEqual(
+                "github_source_unavailable",
+                json.loads(result.stdout)["error"]["code"],
+            )
+            self.assertEqual({}, TaskRepository(hub).load_index().all)
 
-    def test_local_execute_never_mutates_real_github_assignment(self) -> None:
+    def test_assign_and_unassign_change_only_github_assignment(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             hub = Path(temporary)
             repository = TaskRepository(hub)
             repository.initialize()
-            task = add_task(
-                repository,
-                "WDT-20260711T120000Z-A1B2C3",
-            )
-            task["source"] = {
-                "kind": "github_issue",
-                "repo": "acme/service",
-                "number": 42,
-            }
-            atomic_write_json(
-                repository.open_dir / "WDT-20260711T120000Z-A1B2C3.json", task
-            )
-            environment, _, log = self.fake_github(hub)
-            result = self.run_cli(
+            self.seed_task(repository, TASK_A, number=12)
+            github = FakeGitHub(hub)
+            github.issue(12)
+            before = (repository.open_dir / f"{TASK_A}.json").read_bytes()
+
+            assigned = self.run_local(
                 hub,
-                "execute",
-                "WDT-20260711T120000Z-A1B2C3",
-                "--repo",
-                "acme/service",
-                environment=environment,
+                "assign",
+                TASK_A,
+                "--to",
+                "bob",
+                environment=github.environment,
+            )
+            after_assign = (repository.open_dir / f"{TASK_A}.json").read_bytes()
+            unassigned = self.run_local(
+                hub,
+                "unassign",
+                TASK_A,
+                "--from",
+                "bob",
+                environment=github.environment,
             )
 
-            self.assertEqual(3, result.returncode, result.stdout)
+            self.assertEqual(0, assigned.returncode, assigned.stdout + assigned.stderr)
+            self.assertEqual(["bob"], json.loads(assigned.stdout)["delivery"]["owners"])
+            self.assertEqual(0, unassigned.returncode, unassigned.stdout + unassigned.stderr)
+            self.assertEqual([], github.assignees("issue", 12))
+            self.assertEqual(before, after_assign)
             self.assertEqual(
-                "github_claim_reconciliation_failed",
-                json.loads(result.stdout)["error"]["code"],
-            )
-            self.assertFalse(log.exists())
-            self.assertIsNone(
-                repository.load_index()
-                .open["WDT-20260711T120000Z-A1B2C3"]
-                .task["claim"]
+                before,
+                (repository.open_dir / f"{TASK_A}.json").read_bytes(),
             )
 
-    def test_remote_execute_and_release_sync_github_assignment(self) -> None:
-        with tempfile.TemporaryDirectory() as temporary:
-            base = Path(temporary)
-            home = base / "home"
-            home.mkdir()
-            hub = make_hub_origin(base)
-            seed = base / "hub-seed"
-            repository = TaskRepository(seed)
-            task = add_task(
-                repository,
-                "WDT-20260711T120000Z-A1B2C3",
-            )
-            task["source"] = {
-                "kind": "github_issue",
-                "repo": "acme/service",
-                "number": 42,
-            }
-            atomic_write_json(
-                repository.open_dir / "WDT-20260711T120000Z-A1B2C3.json", task
-            )
-            git(["add", "data"], seed)
-            git(["commit", "-m", "add GitHub-backed task"], seed)
-            git(["push", "origin", "main"], seed)
-            environment, state, log = self.fake_github(base)
-            atomic_write_json(
-                home / ".wuditask" / "config.json",
-                {
-                    "schema_version": 2,
-                    "tool_path": str(ROOT),
-                    "tool_remote": git(
-                        ["remote", "get-url", "origin"], ROOT
-                    ).stdout.strip(),
-                    "tool_branch": git(
-                        ["branch", "--show-current"], ROOT
-                    ).stdout.strip(),
-                    "hub_remote": str(hub),
-                    "hub_branch": "main",
-                    "installed_at": "2026-07-11T12:00:00Z",
-                },
-            )
-            environment["HOME"] = str(home)
-
-            claimed = subprocess.run(
-                [
-                    sys.executable,
-                    str(TOOL),
-                    "--json",
-                    "execute",
-                    "WDT-20260711T120000Z-A1B2C3",
-                    "--repo",
-                    "acme/service",
-                ],
-                cwd=ROOT,
-                env=environment,
-                check=False,
-                capture_output=True,
-                text=True,
-            )
-            released = subprocess.run(
-                [
-                    sys.executable,
-                    str(TOOL),
-                    "--json",
-                    "release",
-                    "WDT-20260711T120000Z-A1B2C3",
-                    "--reason",
-                    "Return to the shared queue.",
-                ],
-                cwd=ROOT,
-                env=environment,
-                check=False,
-                capture_output=True,
-                text=True,
-            )
-
-            self.assertEqual(0, claimed.returncode, claimed.stdout)
-            self.assertTrue(json.loads(claimed.stdout)["work_authorized"])
-            self.assertEqual(0, released.returncode, released.stdout)
-            self.assertTrue(json.loads(released.stdout)["confirmed"])
-            self.assertEqual([], json.loads(state.read_text())["assignees"])
-            calls = log.read_text(encoding="utf-8")
-            self.assertIn("--add-assignee alice", calls)
-            self.assertIn("--remove-assignee alice", calls)
-            git(["pull", "--ff-only"], seed)
-            self.assertIsNone(
-                TaskRepository(seed)
-                .load_index()
-                .open["WDT-20260711T120000Z-A1B2C3"]
-                .task["claim"]
-            )
-
-    def test_local_hub_path_is_explicit_and_local_only(self) -> None:
+    def test_assign_supports_pull_request_source(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             hub = Path(temporary)
+            repository = TaskRepository(hub)
+            repository.initialize()
+            self.seed_task(
+                repository,
+                TASK_A,
+                number=22,
+                source_kind="github_pull_request",
+            )
+            github = FakeGitHub(hub)
+            github.pull_request(22, author="carol")
+
+            result = self.run_local(
+                hub,
+                "assign",
+                TASK_A,
+                "--to",
+                "bob",
+                environment=github.environment,
+            )
+            assignees = github.assignees("pr", 22)
+            calls = github.calls()
+
+        self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+        self.assertEqual(["bob"], assignees)
+        self.assertTrue(any(call[:2] == ["pr", "edit"] for call in calls))
+
+    def test_unassign_refuses_login_with_active_agent(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            hub = Path(temporary)
+            repository = TaskRepository(hub)
+            repository.initialize()
+            self.seed_task(
+                repository,
+                TASK_A,
+                number=12,
+                active_agents=[{"login": "bob", "run_id": RUN_ID}],
+            )
+            github = FakeGitHub(hub)
+            github.issue(12, assignees=["bob"])
+
+            result = self.run_local(
+                hub,
+                "unassign",
+                TASK_A,
+                "--from",
+                "bob",
+                environment=github.environment,
+            )
+            assignees = github.assignees("issue", 12)
+            calls = github.calls()
+
+        self.assertNotEqual(0, result.returncode)
+        self.assertEqual(
+            "active_agent_prevents_unassign",
+            json.loads(result.stdout)["error"]["code"],
+        )
+        self.assertEqual(["bob"], assignees)
+        self.assertFalse(any("--remove-assignee" in call for call in calls))
+
+    def test_assignment_commands_reject_archived_tasks(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            hub = Path(temporary)
+            repository = TaskRepository(hub)
+            repository.initialize()
+            task = self.seed_task(repository, TASK_A, number=12)
+            task["completion"] = {
+                "outcome": "done",
+                "completed_at": "2026-07-16T12:00:00Z",
+                "completed_by": "alice",
+                "result": "Verified.",
+                "evidence": ["Tests passed."],
+                "participants": [{"login": "alice", "run_id": RUN_ID}],
+            }
+            repository.archive(task)
+            github = FakeGitHub(hub)
+            github.issue(12, assignees=["alice"])
+
+            assigned = self.run_local(
+                hub,
+                "assign",
+                TASK_A,
+                "--to",
+                "bob",
+                environment=github.environment,
+            )
+            unassigned = self.run_local(
+                hub,
+                "unassign",
+                TASK_A,
+                "--from",
+                "alice",
+                environment=github.environment,
+            )
+
+        self.assertEqual(
+            "task_already_archived",
+            json.loads(assigned.stdout)["error"]["code"],
+        )
+        self.assertEqual(
+            "task_already_archived",
+            json.loads(unassigned.stdout)["error"]["code"],
+        )
+        self.assertFalse(any(call[1] == "edit" for call in github.calls()))
+
+    def test_local_execute_is_rejected_before_assignment_or_hub_mutation(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            hub = Path(temporary)
+            repository = TaskRepository(hub)
+            repository.initialize()
+            self.seed_task(repository, TASK_A, number=12)
+            github = FakeGitHub(hub)
+            github.issue(12)
+
+            result = self.run_local(
+                hub,
+                "execute",
+                TASK_A,
+                "--repo",
+                "acme/service",
+                environment=github.environment,
+            )
+            active = repository.load_index().open[TASK_A].task["active_agents"]
+            calls = github.calls()
+
+        self.assertNotEqual(0, result.returncode)
+        self.assertEqual(
+            "execute_remote_hub_required",
+            json.loads(result.stdout)["error"]["code"],
+        )
+        self.assertEqual([], active)
+        self.assertFalse(any(call[:2] == ["issue", "edit"] for call in calls))
+
+    def test_remote_execute_prefers_assigned_idle_task_over_unowned_task(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            base = Path(temporary)
+            github = FakeGitHub(base)
+            github.issue(12, assignees=["alice"])
+            github.issue(13)
+            github.issue(14, assignees=["bob"])
+            _, seed, environment = self.configure_remote(base, github)
+            repository = TaskRepository(seed)
+            self.seed_task(repository, TASK_A, number=12, priority="P3")
+            self.seed_task(repository, TASK_B, number=13, priority="P0")
+            self.seed_task(repository, TASK_C, number=14, priority="P0")
+            self.publish_seed(seed)
+
+            result = self.run_remote(
+                environment,
+                "execute",
+                "--repo",
+                "acme/service",
+            )
+
+            self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+            payload = json.loads(result.stdout)
+            self.assertEqual(TASK_A, payload["task_id"])
+            self.assertRegex(payload["run_id"], RUN_ID_RE)
+            self.assertTrue(payload["confirmed"])
+            self.assertTrue(payload["sync"]["confirmed"])
+            self.assertTrue(payload["work_authorized"])
+            self.assertFalse(
+                any("--add-assignee" in call for call in github.calls())
+            )
+            git(["pull", "--ff-only"], seed)
+            active = TaskRepository(seed).load_index().open[TASK_A].task["active_agents"]
+            self.assertEqual(
+                [{"login": "alice", "run_id": payload["run_id"]}],
+                active,
+            )
+
+    def test_remote_execute_self_assigns_unowned_before_starting_agent(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            base = Path(temporary)
+            github = FakeGitHub(base)
+            github.issue(13)
+            github.issue(14, assignees=["bob"])
+            _, seed, environment = self.configure_remote(base, github)
+            repository = TaskRepository(seed)
+            self.seed_task(repository, TASK_B, number=13, priority="P2")
+            self.seed_task(repository, TASK_C, number=14, priority="P0")
+            self.publish_seed(seed)
+
+            result = self.run_remote(
+                environment,
+                "execute",
+                "--repo",
+                "acme/service",
+            )
+
+            self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+            payload = json.loads(result.stdout)
+            self.assertEqual(TASK_B, payload["task_id"])
+            self.assertEqual(["alice"], github.assignees("issue", 13))
+            self.assertTrue(payload["github_assignment"]["changed"])
+            self.assertTrue(payload["github_assignment"]["confirmed"])
+            self.assertTrue(payload["work_authorized"])
+            git(["pull", "--ff-only"], seed)
+            active = TaskRepository(seed).load_index().open[TASK_B].task["active_agents"]
+            self.assertEqual(payload["run_id"], active[0]["run_id"])
+
+    def test_explicit_execute_self_assigns_alongside_existing_owners(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            base = Path(temporary)
+            github = FakeGitHub(base)
+            github.issue(12, assignees=["bob"])
+            _, seed, environment = self.configure_remote(base, github)
+            repository = TaskRepository(seed)
+            self.seed_task(repository, TASK_A, number=12)
+            self.publish_seed(seed)
+
+            result = self.run_remote(
+                environment,
+                "execute",
+                TASK_A,
+                "--repo",
+                "acme/service",
+            )
+
+            self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+            payload = json.loads(result.stdout)
+            self.assertEqual(TASK_A, payload["task_id"])
+            self.assertEqual(["bob", "alice"], github.assignees("issue", 12))
+            self.assertTrue(payload["github_assignment"]["changed"])
+            self.assertTrue(payload["work_authorized"])
+            git(["pull", "--ff-only"], seed)
+            self.assertEqual(
+                [{"login": "alice", "run_id": payload["run_id"]}],
+                TaskRepository(seed).load_index().open[TASK_A].task["active_agents"],
+            )
+
+    def test_explicit_execute_rejects_a_second_run_for_same_login(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            base = Path(temporary)
+            github = FakeGitHub(base)
+            github.issue(12, assignees=["alice"])
+            _, seed, environment = self.configure_remote(base, github)
+            repository = TaskRepository(seed)
+            self.seed_task(
+                repository,
+                TASK_A,
+                number=12,
+                active_agents=[{"login": "alice", "run_id": RUN_ID}],
+            )
+            self.publish_seed(seed)
+
+            result = self.run_remote(
+                environment,
+                "execute",
+                TASK_A,
+                "--repo",
+                "acme/service",
+            )
+
+            self.assertNotEqual(0, result.returncode)
+            self.assertEqual("active_agent_conflict", json.loads(result.stdout)["error"]["code"])
+            self.assertEqual(["alice"], github.assignees("issue", 12))
+            self.assertFalse(
+                any("--remove-assignee" in call for call in github.calls())
+            )
+            self.assertEqual(
+                [{"login": "alice", "run_id": RUN_ID}],
+                TaskRepository(seed).load_index().open[TASK_A].task["active_agents"],
+            )
+
+    def test_release_removes_exact_run_without_unassigning_owner(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            base = Path(temporary)
+            github = FakeGitHub(base)
+            github.issue(12, assignees=["alice"])
+            _, seed, environment = self.configure_remote(base, github)
+            repository = TaskRepository(seed)
+            self.seed_task(repository, TASK_A, number=12)
+            self.publish_seed(seed)
+            started = self.run_remote(
+                environment,
+                "execute",
+                TASK_A,
+                "--repo",
+                "acme/service",
+            )
+            self.assertEqual(0, started.returncode, started.stdout + started.stderr)
+            run_id = json.loads(started.stdout)["run_id"]
+
+            released = self.run_remote(
+                environment,
+                "release",
+                TASK_A,
+                "--run-id",
+                run_id,
+                "--reason",
+                "Waiting for input.",
+            )
+
+            self.assertEqual(0, released.returncode, released.stdout + released.stderr)
+            self.assertEqual(run_id, json.loads(released.stdout)["run_id"])
+            self.assertEqual(["alice"], github.assignees("issue", 12))
+            self.assertFalse(
+                any("--remove-assignee" in call for call in github.calls())
+            )
+            git(["pull", "--ff-only"], seed)
+            self.assertEqual(
+                [],
+                TaskRepository(seed).load_index().open[TASK_A].task["active_agents"],
+            )
+
+    def test_archive_parser_allows_conditionally_optional_run_id(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            hub = Path(temporary)
+            TaskRepository(hub).initialize()
+            terminal_without_run = self.run_local(
+                hub,
+                "archive",
+                TASK_A,
+                "--outcome",
+                "cancelled",
+                "--result",
+                "No longer planned.",
+            )
+            parsed = self.run_local(
+                hub,
+                "archive",
+                TASK_A,
+                "--run-id",
+                RUN_ID,
+                "--result",
+                "Verified.",
+                "--evidence",
+                "python3 -m unittest: 12 passed",
+            )
+
+        self.assertEqual("", terminal_without_run.stderr)
+        self.assertEqual(
+            "archive_remote_hub_required",
+            json.loads(terminal_without_run.stdout)["error"]["code"],
+        )
+        self.assertEqual("", parsed.stderr)
+        self.assertEqual(
+            "archive_remote_hub_required",
+            json.loads(parsed.stdout)["error"]["code"],
+        )
+
+    def test_remote_unclaimed_cancelled_archive_needs_no_run_id(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            base = Path(temporary)
+            github = FakeGitHub(base)
+            github.issue(12, state="CLOSED", state_reason="NOT_PLANNED")
+            _, seed, environment = self.configure_remote(base, github)
+            repository = TaskRepository(seed)
+            self.seed_task(repository, TASK_B, number=13)
+            self.seed_task(
+                repository,
+                TASK_A,
+                number=12,
+                dependencies=[TASK_B],
+            )
+            self.publish_seed(seed)
+
+            archived = self.run_remote(
+                environment,
+                "archive",
+                TASK_A,
+                "--outcome",
+                "cancelled",
+                "--result",
+                "No longer planned.",
+            )
+
+            self.assertEqual(0, archived.returncode, archived.stdout + archived.stderr)
+            payload = json.loads(archived.stdout)
+            self.assertIsNone(payload["run_id"])
+            self.assertTrue(payload["sync"]["confirmed"])
+            git(["pull", "--ff-only"], seed)
+            task = TaskRepository(seed).load_index().archived[TASK_A].task
+            self.assertEqual([], task["completion"]["participants"])
+
+    def test_old_dep_check_and_reconcile_parsers_do_not_exist(self) -> None:
+        for command in ("dep-check", "reconcile"):
+            with self.subTest(command=command):
+                result = subprocess.run(
+                    [sys.executable, str(TOOL), "--json", command],
+                    cwd=ROOT,
+                    check=False,
+                    capture_output=True,
+                    text=True,
+                )
+                self.assertEqual(2, result.returncode)
+                self.assertIn("invalid choice", result.stderr)
+
+    def test_local_hub_path_and_remote_cache_errors_keep_json_contract(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            base = Path(temporary)
+            hub = base / "hub"
             TaskRepository(hub).initialize()
             missing = subprocess.run(
                 [sys.executable, str(TOOL), "--local", "--json", "validate"],
@@ -432,74 +802,32 @@ class CliTests(unittest.TestCase):
                 capture_output=True,
                 text=True,
             )
-            remote = subprocess.run(
-                [
-                    sys.executable,
-                    str(TOOL),
-                    "--hub",
-                    str(hub),
-                    "--json",
-                    "validate",
-                ],
+            explicit_remote = subprocess.run(
+                [sys.executable, str(TOOL), "--hub", str(hub), "--json", "validate"],
                 cwd=ROOT,
                 check=False,
                 capture_output=True,
                 text=True,
             )
 
+        self.assertEqual("local_hub_required", json.loads(missing.stdout)["error"]["code"])
         self.assertEqual(
-            "local_hub_required", json.loads(missing.stdout)["error"]["code"]
-        )
-        self.assertEqual(
-            "remote_hub_path_invalid", json.loads(remote.stdout)["error"]["code"]
+            "remote_hub_path_invalid",
+            json.loads(explicit_remote.stdout)["error"]["code"],
         )
 
-    def test_cli_build_site_uses_tool_assets_with_data_only_hub(self) -> None:
+    def test_remote_read_uses_configured_hub_branch(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             base = Path(temporary)
-            hub = base / "hub"
-            TaskRepository(hub).initialize()
-            output = base / "site"
-            result = subprocess.run(
-                [
-                    sys.executable,
-                    str(TOOL),
-                    "--hub",
-                    str(hub),
-                    "--local",
-                    "--json",
-                    "build-site",
-                    "--output",
-                    str(output),
-                ],
-                cwd=ROOT,
-                check=False,
-                capture_output=True,
-                text=True,
-            )
-
-            self.assertEqual(0, result.returncode, result.stderr)
-            self.assertTrue((output / "index.html").is_file())
-            self.assertTrue((output / "install.html").is_file())
-            self.assertTrue((output / "install.md").is_file())
-            self.assertTrue((output / "dag.html").is_file())
-            self.assertTrue((output / "dag.js").is_file())
-            self.assertFalse((hub / "site").exists())
-
-    def test_remote_read_uses_configured_hub_and_branch(self) -> None:
-        with tempfile.TemporaryDirectory() as temporary:
-            base = Path(temporary)
+            github = FakeGitHub(base)
+            github.issue(12)
             home = base / "home"
             home.mkdir()
-            hub = make_hub_origin(base, branch="queue")
+            origin = make_hub_origin(base, branch="queue")
             seed = base / "hub-seed"
-            add_task(
-                TaskRepository(seed),
-                "WDT-20260711T120007Z-888888",
-                title="Configured Hub task",
-            )
+            self.seed_task(TaskRepository(seed), TASK_A, number=12)
             git(["add", "data"], seed)
-            git(["commit", "-m", "add configured task"], seed)
+            git(["commit", "-m", "add configured branch task"], seed)
             git(["push", "origin", "queue"], seed)
             atomic_write_json(
                 home / ".wuditask" / "config.json",
@@ -512,163 +840,64 @@ class CliTests(unittest.TestCase):
                     "tool_branch": git(
                         ["branch", "--show-current"], ROOT
                     ).stdout.strip(),
-                    "hub_remote": str(hub),
+                    "hub_remote": str(origin),
                     "hub_branch": "queue",
                     "installed_at": "2026-07-11T12:00:00Z",
                 },
             )
-            environment = {**os.environ, "HOME": str(home)}
-
-            result = subprocess.run(
-                [sys.executable, str(TOOL), "--json", "list"],
-                cwd=ROOT,
-                env=environment,
-                check=False,
-                capture_output=True,
-                text=True,
-            )
-
-        self.assertEqual(0, result.returncode, result.stderr)
-        payload = json.loads(result.stdout)
-        self.assertEqual(1, payload["count"])
-        self.assertEqual(
-            "WDT-20260711T120007Z-888888",
-            payload["open_tasks"][0]["id"],
-        )
-
-    def test_remote_cache_io_failure_preserves_the_json_contract(self) -> None:
-        with tempfile.TemporaryDirectory() as temporary:
-            base = Path(temporary)
-            home = base / "home"
-            home.mkdir()
-            hub = make_hub_origin(base)
-            atomic_write_json(
-                home / ".wuditask" / "config.json",
-                {
-                    "schema_version": 2,
-                    "tool_path": str(ROOT),
-                    "tool_remote": git(
-                        ["remote", "get-url", "origin"], ROOT
-                    ).stdout.strip(),
-                    "tool_branch": git(
-                        ["branch", "--show-current"], ROOT
-                    ).stdout.strip(),
-                    "hub_remote": str(hub),
-                    "hub_branch": "main",
-                    "installed_at": "2026-07-11T12:00:00Z",
-                },
-            )
-            invalid_xdg = base / "cache-file"
-            invalid_xdg.write_text("not a directory\n", encoding="utf-8")
             environment = {
-                **os.environ,
+                **github.environment,
                 "HOME": str(home),
-                "XDG_CACHE_HOME": str(invalid_xdg),
+                "XDG_CACHE_HOME": str(base / "cache"),
             }
 
-            result = subprocess.run(
-                [sys.executable, str(TOOL), "--json", "validate"],
-                cwd=ROOT,
-                env=environment,
-                check=False,
-                capture_output=True,
-                text=True,
-            )
+            result = self.run_remote(environment, "list")
+
+        self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+        payload = json.loads(result.stdout)
+        self.assertEqual(1, payload["count"])
+        self.assertEqual(TASK_A, payload["open_tasks"][0]["id"])
+
+    def test_remote_cache_io_failure_is_structured_json(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            base = Path(temporary)
+            github = FakeGitHub(base)
+            _, _, environment = self.configure_remote(base, github)
+            invalid_cache = base / "cache-file"
+            invalid_cache.write_text("not a directory\n", encoding="utf-8")
+            environment["XDG_CACHE_HOME"] = str(invalid_cache)
+
+            result = self.run_remote(environment, "validate")
 
         self.assertEqual(4, result.returncode)
         self.assertEqual("", result.stderr)
-        payload = json.loads(result.stdout)
-        self.assertFalse(payload["ok"])
-        self.assertEqual("hub_cache_io_failed", payload["error"]["code"])
+        self.assertEqual(
+            "hub_cache_io_failed",
+            json.loads(result.stdout)["error"]["code"],
+        )
 
-    def test_missing_spec_returns_structured_questions(self) -> None:
+    def test_build_site_help_and_module_entry_remain_available(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
-            result = self.run_cli(Path(temporary), "add", "--title", "Incomplete")
-        self.assertEqual(2, result.returncode)
-        payload = json.loads(result.stdout)
-        self.assertFalse(payload["ok"])
-        self.assertEqual("insufficient_task_spec", payload["error"]["code"])
-        self.assertIn("questions", payload["error"]["details"])
+            base = Path(temporary)
+            hub = base / "hub"
+            TaskRepository(hub).initialize()
+            output = base / "site"
+            built = self.run_local(hub, "build-site", "--output", str(output))
 
-    def test_help_is_read_only_and_topic_aware(self) -> None:
-        result = subprocess.run(
-            [
-                sys.executable,
-                str(TOOL),
-                "--json",
-                "help",
-                "archive",
-            ],
-            cwd=ROOT,
-            check=False,
-            capture_output=True,
-            text=True,
-        )
+            self.assertEqual(0, built.returncode, built.stdout + built.stderr)
+            for name in ("index.html", "workflow.html", "install.html", "dag.html"):
+                self.assertTrue((output / name).is_file(), name)
 
-        self.assertEqual(0, result.returncode, result.stderr)
-        payload = json.loads(result.stdout)
-        self.assertTrue(payload["ok"])
-        self.assertEqual("archive", payload["topic"])
-        self.assertEqual(["archive"], [item["name"] for item in payload["commands"]])
-        self.assertEqual("wuditask help [topic]", payload["cli_invocation"])
-        self.assertEqual(
-            "$wuditask-archive",
-            payload["commands"][0]["agent_usage"]["codex"],
-        )
-
-        selfupdate = subprocess.run(
-            [sys.executable, str(TOOL), "--json", "help", "selfupdate"],
-            cwd=ROOT,
-            check=False,
-            capture_output=True,
-            text=True,
-        )
-        self.assertEqual(0, selfupdate.returncode, selfupdate.stderr)
-        selfupdate_payload = json.loads(selfupdate.stdout)
-        self.assertEqual(
-            "/wuditask-selfupdate fix <request>",
-            selfupdate_payload["commands"][0]["agent_usage"]["claude_fix"],
-        )
-        self.assertEqual(
-            {"codex", "claude", "codex_fix", "claude_fix"},
-            set(selfupdate_payload["commands"][0]["agent_usage"]),
-        )
-        self.assertTrue(
-            any(
-                "does not create an Issue or queue task" in note
-                for note in selfupdate_payload["notes"]
-            )
-        )
-
-        add = subprocess.run(
-            [sys.executable, str(TOOL), "--json", "help", "add"],
-            cwd=ROOT,
-            check=False,
-            capture_output=True,
-            text=True,
-        )
-        self.assertEqual(0, add.returncode, add.stderr)
-        add_payload = json.loads(add.stdout)
-        self.assertEqual(
-            "$wuditask-add", add_payload["commands"][0]["agent_usage"]["codex"]
-        )
-        self.assertIn("--source ISSUE_OR_PR_URL", add_payload["commands"][0]["usage"])
-
-    def test_help_routes_every_operation_to_a_dedicated_skill(self) -> None:
         routes = {
-            "add": ("codex", "$wuditask-add"),
-            "execute": ("codex", "$wuditask-execute"),
-            "dep-check": ("codex", "$wuditask-dep-check"),
-            "archive": ("codex", "$wuditask-archive"),
-            "delete": ("codex", "$wuditask-delete"),
-            "release": ("codex", "$wuditask-release"),
-            "list": ("codex", "$wuditask-list"),
-            "show": ("codex", "$wuditask-show"),
-            "reconcile": ("codex", "$wuditask-reconcile"),
-            "install": ("codex", "$wuditask-install"),
-            "selfupdate": ("codex", "$wuditask-selfupdate"),
+            "add": "$wuditask-add",
+            "assign": "$wuditask-assign",
+            "check": "$wuditask-check",
+            "execute": "$wuditask-execute",
+            "archive": "$wuditask-archive",
+            "release": "$wuditask-release",
+            "unassign": "$wuditask-unassign",
         }
-        for topic, (key, invocation) in routes.items():
+        for topic, invocation in routes.items():
             with self.subTest(topic=topic):
                 result = subprocess.run(
                     [sys.executable, str(TOOL), "--json", "help", topic],
@@ -677,35 +906,19 @@ class CliTests(unittest.TestCase):
                     capture_output=True,
                     text=True,
                 )
-                self.assertEqual(0, result.returncode, result.stderr)
+                self.assertEqual(0, result.returncode, result.stdout + result.stderr)
                 payload = json.loads(result.stdout)
-                self.assertEqual(
-                    invocation,
-                    payload["commands"][0]["agent_usage"][key],
-                )
+                self.assertEqual(invocation, payload["commands"][0]["agent_usage"]["codex"])
 
-        text_help = subprocess.run(
-            [sys.executable, str(TOOL), "help", "selfupdate"],
-            cwd=ROOT,
-            check=False,
-            capture_output=True,
-            text=True,
-        )
-        self.assertEqual(0, text_help.returncode, text_help.stderr)
-        self.assertIn("$wuditask-selfupdate fix <request>", text_help.stdout)
-        self.assertIn("does not create an Issue or queue task", text_help.stdout)
-
-    def test_module_entry_point_uses_the_tool_root(self) -> None:
-        result = subprocess.run(
+        version = subprocess.run(
             [sys.executable, "-m", "wuditask", "--version"],
             cwd=ROOT,
             check=False,
             capture_output=True,
             text=True,
         )
-
-        self.assertEqual(0, result.returncode, result.stderr)
-        self.assertEqual("wuditask 0.6.0", result.stdout.strip())
+        self.assertEqual(0, version.returncode, version.stderr)
+        self.assertEqual("wuditask 0.7.0", version.stdout.strip())
 
 
 if __name__ == "__main__":

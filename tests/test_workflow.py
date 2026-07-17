@@ -5,413 +5,417 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from wuditask.dependencies import dependency_report
 from wuditask.errors import WudiTaskError
-from wuditask.model import Identity
-from wuditask.util import atomic_write_json
-from wuditask.workflow import archive_task, claim_task, release_task
+from wuditask.workflow import archive_task, release_agent, start_agent
 
-from tests.helpers import ACTOR, OTHER_ACTOR, add_task, make_repository
+from tests.helpers import (
+    ACTOR,
+    OTHER_ACTOR,
+    OTHER_RUN_ID,
+    RUN_ID,
+    add_task,
+    make_repository,
+)
 
 DEPENDENCY_ID = "WDT-20260711T120000Z-111111"
 PARENT_ID = "WDT-20260711T120001Z-222222"
 
 
+def delivery(state: str, owners: list[str]) -> dict[str, object]:
+    return {
+        "status": "unavailable" if state == "unavailable" else "fresh",
+        "delivery_state": state,
+        "title": "Canonical task",
+        "body": "Canonical body",
+        "owners": owners,
+        "assignees": owners,
+        "prs": [],
+        "updated_at": "2026-07-16T09:00:00Z",
+        "fetched_at": "2026-07-16T10:00:00Z",
+        "error": "API unavailable" if state == "unavailable" else None,
+        "url": "https://github.com/acme/service/issues/12",
+    }
+
+
 class WorkflowTests(unittest.TestCase):
-    @staticmethod
-    def github_delivery(
-        state: str,
-        *,
-        assignees: list[str] | None = None,
-        author: str | None = None,
-    ) -> dict[str, object]:
-        prs = []
-        if author:
-            prs.append({"state": "OPEN", "merged_at": None, "author": author})
-        return {
-            "status": "fresh",
-            "delivery_state": state,
-            "assignees": assignees or [],
-            "prs": prs,
-            "updated_at": None,
-            "fetched_at": "2026-07-16T10:00:00Z",
-            "error": None,
-            "url": "https://github.com/acme/service/issues/42",
-        }
-
-    def test_github_delivery_owner_blocks_another_claim(self) -> None:
+    def test_start_requires_live_owner_and_ready_dependencies(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             repository = make_repository(Path(temporary))
-            task = add_task(repository, PARENT_ID)
-            task["source"] = {
-                "kind": "github_issue",
-                "repo": "acme/service",
-                "number": 42,
-            }
-            atomic_write_json(repository.open_dir / f"{PARENT_ID}.json", task)
+            add_task(repository, PARENT_ID)
             with patch(
                 "wuditask.workflow.fetch_delivery",
-                return_value=self.github_delivery("review", assignees=["bob"]),
+                return_value=delivery("assigned", ["bob"]),
             ):
                 with self.assertRaises(WudiTaskError) as raised:
-                    claim_task(repository, ACTOR, task_id=PARENT_ID)
+                    start_agent(repository, ACTOR, task_id=PARENT_ID, run_id=RUN_ID)
 
-        self.assertEqual("delivery_owned_elsewhere", raised.exception.code)
+        self.assertEqual("delivery_owner_required", raised.exception.code)
 
-    def test_current_github_assignee_can_adopt_the_task(self) -> None:
+    def test_start_is_idempotent_per_run_and_conflicts_per_login(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             repository = make_repository(Path(temporary))
-            task = add_task(repository, PARENT_ID)
-            task["source"] = {
-                "kind": "github_issue",
-                "repo": "acme/service",
-                "number": 42,
-            }
-            atomic_write_json(repository.open_dir / f"{PARENT_ID}.json", task)
+            add_task(repository, PARENT_ID)
             with patch(
                 "wuditask.workflow.fetch_delivery",
-                return_value=self.github_delivery("assigned", assignees=["alice"]),
+                return_value=delivery("assigned", ["alice"]),
             ):
-                claimed = claim_task(repository, ACTOR, task_id=PARENT_ID)
+                first = start_agent(repository, ACTOR, task_id=PARENT_ID, run_id=RUN_ID)
+                retry = start_agent(repository, ACTOR, task_id=PARENT_ID, run_id=RUN_ID)
+                with self.assertRaises(WudiTaskError) as raised:
+                    start_agent(
+                        repository,
+                        ACTOR,
+                        task_id=PARENT_ID,
+                        run_id=OTHER_RUN_ID,
+                    )
 
-        self.assertEqual("adopt", claimed["delivery_eligibility"]["decision"])
+        self.assertTrue(first["changed"])
+        self.assertTrue(first["agent_started"])
+        self.assertFalse(retry["changed"])
+        self.assertTrue(retry["already_active"])
+        self.assertEqual("active_agent_conflict", raised.exception.code)
 
-    def test_existing_claim_rechecks_github_ownership_and_availability(self) -> None:
+    def test_different_live_owners_may_be_active_concurrently(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             repository = make_repository(Path(temporary))
-            task = add_task(repository, PARENT_ID)
-            task["source"] = {
-                "kind": "github_issue",
-                "repo": "acme/service",
-                "number": 42,
-            }
-            atomic_write_json(repository.open_dir / f"{PARENT_ID}.json", task)
+            add_task(repository, PARENT_ID)
             with patch(
                 "wuditask.workflow.fetch_delivery",
-                return_value=self.github_delivery("assigned", assignees=["alice"]),
+                return_value=delivery("review", ["alice", "bob"]),
             ):
-                claim_task(repository, ACTOR, task_id=PARENT_ID)
+                start_agent(repository, ACTOR, task_id=PARENT_ID, run_id=RUN_ID)
+                result = start_agent(
+                    repository,
+                    OTHER_ACTOR,
+                    task_id=PARENT_ID,
+                    run_id=OTHER_RUN_ID,
+                )
 
-            with patch(
-                "wuditask.workflow.fetch_delivery",
-                return_value=self.github_delivery("assigned", assignees=["bob"]),
-            ):
-                with self.assertRaises(WudiTaskError) as reassigned:
-                    claim_task(repository, ACTOR, task_id=PARENT_ID)
-            self.assertEqual("delivery_owned_elsewhere", reassigned.exception.code)
+        self.assertEqual(
+            [
+                {"login": "alice", "run_id": RUN_ID},
+                {"login": "bob", "run_id": OTHER_RUN_ID},
+            ],
+            result["task"]["active_agents"],
+        )
 
-            unavailable = self.github_delivery("unavailable")
-            unavailable["status"] = "unavailable"
-            unavailable["error"] = "API unavailable"
-            with patch("wuditask.workflow.fetch_delivery", return_value=unavailable):
-                with self.assertRaises(WudiTaskError) as unknown:
-                    claim_task(repository, ACTOR, task_id=PARENT_ID)
-            self.assertEqual("github_delivery_unavailable", unknown.exception.code)
-
-    def test_done_archive_requires_completed_github_delivery(self) -> None:
+    def test_start_rejects_blocked_dependency_before_writing(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             repository = make_repository(Path(temporary))
-            task = add_task(repository, PARENT_ID)
-            task["source"] = {
-                "kind": "github_issue",
-                "repo": "acme/service",
-                "number": 42,
-            }
-            atomic_write_json(repository.open_dir / f"{PARENT_ID}.json", task)
+            add_task(repository, DEPENDENCY_ID)
+            add_task(repository, PARENT_ID, dependencies=[DEPENDENCY_ID])
             with patch(
                 "wuditask.workflow.fetch_delivery",
-                return_value=self.github_delivery("assigned", assignees=["alice"]),
-            ):
-                claim_task(repository, ACTOR, task_id=PARENT_ID)
-            with patch(
-                "wuditask.workflow.fetch_delivery",
-                return_value=self.github_delivery("review", assignees=["alice"]),
+                return_value=delivery("assigned", ["alice"]),
             ):
                 with self.assertRaises(WudiTaskError) as raised:
+                    start_agent(repository, ACTOR, task_id=PARENT_ID, run_id=RUN_ID)
+
+            self.assertEqual([], repository.load_index().open[PARENT_ID].task["active_agents"])
+        self.assertEqual("dependency_blocked", raised.exception.code)
+
+    def test_release_requires_exact_actor_run_and_removes_only_that_actor(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            repository = make_repository(Path(temporary))
+            add_task(repository, PARENT_ID)
+            with patch(
+                "wuditask.workflow.fetch_delivery",
+                return_value=delivery("review", ["alice", "bob"]),
+            ):
+                start_agent(repository, ACTOR, task_id=PARENT_ID, run_id=RUN_ID)
+                start_agent(repository, OTHER_ACTOR, task_id=PARENT_ID, run_id=OTHER_RUN_ID)
+            with self.assertRaises(WudiTaskError) as mismatch:
+                release_agent(
+                    repository,
+                    ACTOR,
+                    PARENT_ID,
+                    run_id=OTHER_RUN_ID,
+                    reason="Wrong run",
+                )
+            released = release_agent(
+                repository,
+                ACTOR,
+                PARENT_ID,
+                run_id=RUN_ID,
+                reason="Stop this agent",
+            )
+
+        self.assertEqual("active_agent_run_mismatch", mismatch.exception.code)
+        self.assertEqual(
+            [{"login": "bob", "run_id": OTHER_RUN_ID}],
+            released["task"]["active_agents"],
+        )
+
+    def test_archive_done_requires_terminal_delivery_active_run_and_evidence(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            repository = make_repository(Path(temporary))
+            add_task(repository, PARENT_ID)
+            with patch(
+                "wuditask.workflow.fetch_delivery",
+                return_value=delivery("review", ["alice", "bob"]),
+            ):
+                start_agent(repository, ACTOR, task_id=PARENT_ID, run_id=RUN_ID)
+                start_agent(repository, OTHER_ACTOR, task_id=PARENT_ID, run_id=OTHER_RUN_ID)
+
+            with patch(
+                "wuditask.workflow.fetch_delivery",
+                return_value=delivery("verification_needed", ["alice", "bob"]),
+            ):
+                with self.assertRaises(WudiTaskError) as no_evidence:
                     archive_task(
                         repository,
                         ACTOR,
                         PARENT_ID,
                         outcome="done",
                         result="Implemented.",
-                        evidence={"AC-1": "Tests passed."},
+                        evidence=[],
+                        run_id=RUN_ID,
                     )
-            self.assertEqual("github_delivery_incomplete", raised.exception.code)
-            with patch(
-                "wuditask.workflow.fetch_delivery",
-                return_value=self.github_delivery("verification_needed"),
-            ):
                 archived = archive_task(
                     repository,
                     ACTOR,
                     PARENT_ID,
                     outcome="done",
-                    result="Implemented and verified.",
-                    evidence={"AC-1": "Tests passed."},
+                    result="Implemented.",
+                    evidence=["Tests passed", "PR merged"],
+                    run_id=RUN_ID,
                     now="2026-07-11T13:00:00Z",
                 )
 
-        self.assertTrue(archived["confirmed"])
+        self.assertEqual("insufficient_archive_evidence", no_evidence.exception.code)
+        self.assertEqual([], archived["task"]["active_agents"])
+        self.assertEqual(
+            [
+                {"login": "alice", "run_id": RUN_ID},
+                {"login": "bob", "run_id": OTHER_RUN_ID},
+            ],
+            archived["task"]["completion"]["participants"],
+        )
+        self.assertEqual("alice", archived["task"]["completion"]["completed_by"])
+        self.assertEqual(["Tests passed", "PR merged"], archived["task"]["completion"]["evidence"])
 
-    def test_add_claim_archive_lifecycle(self) -> None:
+    def test_archive_rejects_wrong_run_and_nonterminal_delivery(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             repository = make_repository(Path(temporary))
             add_task(repository, PARENT_ID)
-
-            claimed = claim_task(repository, ACTOR, repo="acme/service")
-            self.assertEqual(PARENT_ID, claimed["task_id"])
-            self.assertTrue(claimed["confirmed"])
-            self.assertEqual("alice", claimed["task"]["claim"]["github_login"])
-
-            retried = claim_task(repository, ACTOR, task_id=PARENT_ID)
-            self.assertTrue(retried["already_claimed"])
-            self.assertTrue(retried["dependency_check"]["ready"])
-
-            with self.assertRaises(WudiTaskError) as missing:
-                archive_task(
-                    repository,
-                    ACTOR,
-                    PARENT_ID,
-                    outcome="done",
-                    result="Implemented.",
-                    evidence={},
-                )
-            self.assertEqual("insufficient_archive_evidence", missing.exception.code)
-
-            archived = archive_task(
-                repository,
-                ACTOR,
-                PARENT_ID,
-                outcome="done",
-                result="Implemented and verified.",
-                evidence={"AC-1": "python3 -m unittest: 8 tests passed"},
-                now="2026-07-11T13:00:00Z",
-            )
-            self.assertTrue(archived["confirmed"])
-            index = repository.load_index()
-            self.assertNotIn(PARENT_ID, index.open)
-            self.assertIn(PARENT_ID, index.archived)
-            self.assertEqual(
-                "passed",
-                index.archived[PARENT_ID].task["completion"]["acceptance_results"][0][
-                    "status"
-                ],
-            )
-
-    def test_dependency_blocks_until_done_with_evidence(self) -> None:
-        with tempfile.TemporaryDirectory() as temporary:
-            repository = make_repository(Path(temporary))
-            add_task(repository, DEPENDENCY_ID, title="Dependency")
-            add_task(
-                repository,
-                PARENT_ID,
-                title="Parent",
-                dependencies=[DEPENDENCY_ID],
-            )
-
-            report = dependency_report(repository.load_index(), PARENT_ID)["task"]
-            self.assertFalse(report["ready"])
-            self.assertEqual(
-                "dependency is still open", report["dependencies"][0]["reason"]
-            )
-
-            with self.assertRaises(WudiTaskError) as blocked:
-                claim_task(repository, ACTOR, task_id=PARENT_ID)
-            self.assertEqual("no_ready_task", blocked.exception.code)
-
-            claim_task(repository, ACTOR, task_id=DEPENDENCY_ID)
-            archive_task(
-                repository,
-                ACTOR,
-                DEPENDENCY_ID,
-                outcome="done",
-                result="Dependency complete.",
-                evidence={"AC-1": "Regression command passed."},
-                now="2026-07-11T13:00:00Z",
-            )
-
-            report = dependency_report(repository.load_index(), PARENT_ID)["task"]
-            self.assertTrue(report["ready"])
-            self.assertEqual("acme/service", report["dependencies"][0]["repo"])
-            self.assertEqual(1, len(report["dependencies"][0]["acceptance_criteria"]))
-            claimed = claim_task(repository, OTHER_ACTOR, task_id=PARENT_ID)
-            self.assertEqual("bob", claimed["task"]["claim"]["github_login"])
-
-    def test_failed_dependency_never_unblocks_parent(self) -> None:
-        with tempfile.TemporaryDirectory() as temporary:
-            repository = make_repository(Path(temporary))
-            add_task(repository, DEPENDENCY_ID, title="Dependency")
-            add_task(repository, PARENT_ID, dependencies=[DEPENDENCY_ID])
-            claim_task(repository, ACTOR, task_id=DEPENDENCY_ID)
-            archive_task(
-                repository,
-                ACTOR,
-                DEPENDENCY_ID,
-                outcome="failed",
-                result="Upstream API cannot meet the requirement.",
-                evidence={},
-                now="2026-07-11T13:00:00Z",
-            )
-            report = dependency_report(repository.load_index(), PARENT_ID)["task"]
-            self.assertFalse(report["ready"])
-            self.assertIn("failed", report["dependencies"][0]["reason"])
-
-    def test_blocked_unclaimed_task_can_be_cancelled_atomically(self) -> None:
-        with tempfile.TemporaryDirectory() as temporary:
-            repository = make_repository(Path(temporary))
-            add_task(repository, DEPENDENCY_ID, title="Dependency")
-            add_task(
-                repository,
-                PARENT_ID,
-                title="Parent",
-                dependencies=[DEPENDENCY_ID],
-            )
-
-            archived = archive_task(
-                repository,
-                ACTOR,
-                PARENT_ID,
-                outcome="cancelled",
-                result="No longer required.",
-                evidence={},
-                now="2026-07-11T13:00:00Z",
-            )
-
-            self.assertTrue(archived["confirmed"])
-            completion = repository.load_index().archived[PARENT_ID].task["completion"]
-            self.assertEqual("cancelled", completion["outcome"])
-
-    def test_github_backed_terminal_archive_requires_not_planned(self) -> None:
-        with tempfile.TemporaryDirectory() as temporary:
-            repository = make_repository(Path(temporary))
-            task = add_task(repository, PARENT_ID)
-            task["source"] = {
-                "kind": "github_issue",
-                "repo": "acme/service",
-                "number": 42,
-            }
-            atomic_write_json(repository.open_dir / f"{PARENT_ID}.json", task)
             with patch(
                 "wuditask.workflow.fetch_delivery",
-                return_value=self.github_delivery("assigned", assignees=["alice"]),
+                return_value=delivery("assigned", ["alice"]),
             ):
+                start_agent(repository, ACTOR, task_id=PARENT_ID, run_id=RUN_ID)
                 with self.assertRaises(WudiTaskError) as active:
                     archive_task(
                         repository,
                         ACTOR,
                         PARENT_ID,
-                        outcome="cancelled",
-                        result="Requirement withdrawn.",
-                        evidence={},
+                        outcome="done",
+                        result="Done",
+                        evidence=["test"],
+                        run_id=RUN_ID,
                     )
-            self.assertEqual("github_delivery_not_terminal", active.exception.code)
+            with patch(
+                "wuditask.workflow.fetch_delivery",
+                return_value=delivery("verification_needed", ["alice"]),
+            ):
+                with self.assertRaises(WudiTaskError) as mismatch:
+                    archive_task(
+                        repository,
+                        ACTOR,
+                        PARENT_ID,
+                        outcome="done",
+                        result="Done",
+                        evidence=["test"],
+                        run_id=OTHER_RUN_ID,
+                    )
+
+        self.assertEqual("github_delivery_incomplete", active.exception.code)
+        self.assertEqual("active_agent_run_mismatch", mismatch.exception.code)
+
+    def test_cancelled_archive_allows_blocked_unclaimed_creator(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            repository = make_repository(Path(temporary))
+            add_task(repository, DEPENDENCY_ID)
+            add_task(repository, PARENT_ID, dependencies=[DEPENDENCY_ID])
 
             with patch(
                 "wuditask.workflow.fetch_delivery",
-                return_value=self.github_delivery("cancelled"),
+                return_value=delivery("cancelled", []),
             ):
                 archived = archive_task(
                     repository,
                     ACTOR,
                     PARENT_ID,
                     outcome="cancelled",
-                    result="Requirement withdrawn.",
-                    evidence={},
+                    result="No longer planned.",
+                    evidence=[],
+                    run_id=None,
+                    now="2026-07-11T13:00:00Z",
                 )
 
         self.assertTrue(archived["confirmed"])
+        self.assertIsNone(archived["run_id"])
+        self.assertEqual([], archived["task"]["active_agents"])
+        self.assertEqual([], archived["task"]["completion"]["participants"])
+        self.assertEqual("alice", archived["task"]["completion"]["completed_by"])
 
-    def test_cycle_is_reported(self) -> None:
-        with tempfile.TemporaryDirectory() as temporary:
-            repository = make_repository(Path(temporary))
-            first = add_task(repository, DEPENDENCY_ID, title="First")
-            add_task(
-                repository, PARENT_ID, title="Second", dependencies=[DEPENDENCY_ID]
-            )
-            first["dependencies"] = [PARENT_ID]
-            atomic_write_json(repository.open_dir / f"{DEPENDENCY_ID}.json", first)
+    def test_released_task_allows_creator_terminal_failure_or_cancellation(self) -> None:
+        cases = (("failed", "verification_needed"), ("cancelled", "cancelled"))
+        for outcome, terminal_state in cases:
+            with self.subTest(outcome=outcome), tempfile.TemporaryDirectory() as temporary:
+                repository = make_repository(Path(temporary))
+                add_task(repository, PARENT_ID)
+                with patch(
+                    "wuditask.workflow.fetch_delivery",
+                    return_value=delivery("assigned", ["alice"]),
+                ):
+                    start_agent(repository, ACTOR, task_id=PARENT_ID, run_id=RUN_ID)
+                release_agent(repository, ACTOR, PARENT_ID, run_id=RUN_ID)
 
-            report = dependency_report(repository.load_index(), DEPENDENCY_ID)["task"]
-            self.assertEqual(
-                [DEPENDENCY_ID, PARENT_ID, DEPENDENCY_ID],
-                report["cycle"],
-            )
-            self.assertFalse(report["ready"])
+                with patch(
+                    "wuditask.workflow.fetch_delivery",
+                    return_value=delivery(terminal_state, []),
+                ):
+                    archived = archive_task(
+                        repository,
+                        ACTOR,
+                        PARENT_ID,
+                        outcome=outcome,
+                        result=f"Terminal {outcome} result.",
+                        evidence=[],
+                        run_id=None,
+                    )
+                    retry = archive_task(
+                        repository,
+                        ACTOR,
+                        PARENT_ID,
+                        outcome=outcome,
+                        result=f"Terminal {outcome} result.",
+                        evidence=[],
+                        run_id=None,
+                    )
 
-    def test_release_requires_current_human_owner(self) -> None:
+                self.assertEqual([], archived["task"]["completion"]["participants"])
+                self.assertTrue(retry["already_archived"])
+                self.assertFalse(retry["changed"])
+
+    def test_terminal_archive_with_active_agents_requires_matching_actor_run(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             repository = make_repository(Path(temporary))
             add_task(repository, PARENT_ID)
-            claim_task(repository, ACTOR, task_id=PARENT_ID)
-            with self.assertRaises(WudiTaskError) as mismatch:
-                release_task(
-                    repository, OTHER_ACTOR, PARENT_ID, reason="Cannot continue."
+            with patch(
+                "wuditask.workflow.fetch_delivery",
+                return_value=delivery("assigned", ["alice"]),
+            ):
+                start_agent(repository, ACTOR, task_id=PARENT_ID, run_id=RUN_ID)
+
+            with patch(
+                "wuditask.workflow.fetch_delivery",
+                return_value=delivery("cancelled", []),
+            ):
+                with self.assertRaises(WudiTaskError) as missing:
+                    archive_task(
+                        repository,
+                        ACTOR,
+                        PARENT_ID,
+                        outcome="cancelled",
+                        result="No longer planned.",
+                        evidence=[],
+                        run_id=None,
+                    )
+                with self.assertRaises(WudiTaskError) as mismatch:
+                    archive_task(
+                        repository,
+                        ACTOR,
+                        PARENT_ID,
+                        outcome="cancelled",
+                        result="No longer planned.",
+                        evidence=[],
+                        run_id=OTHER_RUN_ID,
+                    )
+
+        self.assertEqual("archive_run_id_required", missing.exception.code)
+        self.assertEqual("active_agent_run_mismatch", mismatch.exception.code)
+
+    def test_unclaimed_terminal_archive_rejects_stale_run_id(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            repository = make_repository(Path(temporary))
+            add_task(repository, PARENT_ID)
+            with patch(
+                "wuditask.workflow.fetch_delivery",
+                return_value=delivery("cancelled", []),
+            ):
+                with self.assertRaises(WudiTaskError) as raised:
+                    archive_task(
+                        repository,
+                        ACTOR,
+                        PARENT_ID,
+                        outcome="cancelled",
+                        result="No longer planned.",
+                        evidence=[],
+                        run_id=RUN_ID,
+                    )
+
+        self.assertEqual("archive_run_id_unexpected", raised.exception.code)
+
+    def test_terminal_archive_matching_run_clears_every_active_agent(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            repository = make_repository(Path(temporary))
+            add_task(repository, PARENT_ID)
+            with patch(
+                "wuditask.workflow.fetch_delivery",
+                return_value=delivery("review", ["alice", "bob"]),
+            ):
+                start_agent(repository, ACTOR, task_id=PARENT_ID, run_id=RUN_ID)
+                start_agent(
+                    repository,
+                    OTHER_ACTOR,
+                    task_id=PARENT_ID,
+                    run_id=OTHER_RUN_ID,
                 )
-            self.assertEqual("claim_holder_mismatch", mismatch.exception.code)
-            released = release_task(
-                repository,
-                ACTOR,
-                PARENT_ID,
-                reason="Waiting for clarification.",
-            )
-            self.assertTrue(released["changed"])
-            task = repository.load_index().open[PARENT_ID].task
-            self.assertIsNone(task["claim"])
 
-    def test_github_id_survives_login_rename(self) -> None:
-        renamed = Identity("alice-renamed", ACTOR.github_id)
-        with tempfile.TemporaryDirectory() as temporary:
-            repository = make_repository(Path(temporary))
-            add_task(repository, PARENT_ID)
-            claim_task(repository, ACTOR, task_id=PARENT_ID)
-
-            resumed = claim_task(repository, renamed, task_id=PARENT_ID)
-            released = release_task(
-                repository,
-                renamed,
-                PARENT_ID,
-                reason="Resume under the renamed GitHub login, then release.",
-            )
-
-        self.assertTrue(resumed["already_claimed"])
-        self.assertTrue(resumed["claim_login_refreshed"])
-        self.assertEqual("alice-renamed", resumed["task"]["claim"]["github_login"])
-        self.assertTrue(released["confirmed"])
-
-    def test_release_preflight_token_prevents_aba_and_unclaimed_races(self) -> None:
-        with tempfile.TemporaryDirectory() as temporary:
-            repository = make_repository(Path(temporary))
-            add_task(repository, PARENT_ID)
-            first = claim_task(repository, ACTOR, task_id=PARENT_ID)
-            old_token = first["task"]["claim"]["token"]
-
-            with self.assertRaises(WudiTaskError) as expected_unclaimed:
-                release_task(
+            with patch(
+                "wuditask.workflow.fetch_delivery",
+                return_value=delivery("cancelled", []),
+            ):
+                archived = archive_task(
                     repository,
                     ACTOR,
                     PARENT_ID,
-                    reason="Stale unclaimed preflight.",
-                    expected_unclaimed=True,
+                    outcome="cancelled",
+                    result="No longer planned.",
+                    evidence=[],
+                    run_id=RUN_ID,
                 )
-            self.assertEqual("claim_state_changed", expected_unclaimed.exception.code)
 
-            release_task(
-                repository,
-                ACTOR,
-                PARENT_ID,
-                reason="End the first lease.",
-            )
-            second = claim_task(repository, ACTOR, task_id=PARENT_ID)
-            self.assertNotEqual(old_token, second["task"]["claim"]["token"])
-            with self.assertRaises(WudiTaskError) as stale_token:
-                release_task(
-                    repository,
-                    ACTOR,
-                    PARENT_ID,
-                    reason="Stale lease release.",
-                    expected_claim_token=old_token,
-                )
-            self.assertEqual("claim_token_mismatch", stale_token.exception.code)
+        self.assertEqual([], archived["task"]["active_agents"])
+        self.assertEqual(
+            [
+                {"login": "alice", "run_id": RUN_ID},
+                {"login": "bob", "run_id": OTHER_RUN_ID},
+            ],
+            archived["task"]["completion"]["participants"],
+        )
+
+    def test_unclaimed_terminal_archive_requires_task_creator(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            repository = make_repository(Path(temporary))
+            add_task(repository, PARENT_ID)
+            with patch(
+                "wuditask.workflow.fetch_delivery",
+                return_value=delivery("cancelled", ["bob"]),
+            ):
+                with self.assertRaises(WudiTaskError) as raised:
+                    archive_task(
+                        repository,
+                        OTHER_ACTOR,
+                        PARENT_ID,
+                        outcome="cancelled",
+                        result="No longer planned.",
+                        evidence=[],
+                        run_id=None,
+                    )
+
+        self.assertEqual("archive_creator_required", raised.exception.code)
 
 
 if __name__ == "__main__":

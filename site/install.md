@@ -1,6 +1,6 @@
 # 安装与使用 WudiTask
 
-WudiTask 是一个由 GitHub 和 Git 驱动的分布式任务队列。GitHub Issue 或 PR 记录任务描述、责任人和交付进展；独立的 Task Hub 保存执行租约、跨仓依赖和验收结果。工具仓与 Hub 必须是两个不同的 Git 仓库。
+WudiTask 是一个由 GitHub 和 Git 驱动的分布式任务队列。canonical GitHub Issue 或 PR 记录任务描述、责任人和交付进展；独立的 Task Hub 保存运行中的 agent、跨仓依赖和验收结果。工具仓与 Hub 必须是两个不同的 Git 仓库。
 
 ## 安装前准备
 
@@ -14,10 +14,10 @@ WudiTask 是一个由 GitHub 和 Git 驱动的分布式任务队列。GitHub Iss
 ```bash
 gh auth login
 gh auth status
-gh api user --jq '{login, id}'
+gh api user --jq .login
 ```
 
-WudiTask 用这个 GitHub 身份记录远端写入和 claim。认证失败时不要改用匿名或本地任务文件绕过检查。
+WudiTask 用这个 GitHub 身份确认 owner，并按 login 记录 Hub 中的 `active_agents`。认证失败时不要改用匿名或本地任务文件绕过检查。
 
 ## 在新电脑上安装
 
@@ -65,7 +65,7 @@ wuditask --json validate
 wuditask help
 ```
 
-`validate` 必须成功报告 Hub schema、open、archive 和 deletion receipt 状态。写命令只有同时返回 `ok=true`、`confirmed=true` 和 `sync.confirmed=true` 才完成远端确认；`execute` 还必须返回 `work_authorized=true`，在此之前不要开工。
+`validate` 必须成功报告 Hub schema、open、archive 和 deletion receipt 状态。写命令只有同时返回 `ok=true`、`confirmed=true` 和 `sync.confirmed=true` 才完成远端确认。`execute` 只有通过普通、非 force Hub push 确认 active agent 后才授权开工。
 
 ## 日常任务工作流
 
@@ -73,20 +73,20 @@ wuditask help
 
 1. 用 `$wuditask-add` 或 `/wuditask-add` 添加完整任务。
 2. 用 `$wuditask-list`、`$wuditask-show` 或对应 Claude skill 查看任务。
-3. 用 `$wuditask-dep-check` 检查跨仓依赖是否满足。
-4. 用 `$wuditask-execute` 领取 ready 任务；确认远端 lease 后才开始修改执行仓。
-5. 用 `$wuditask-reconcile` 对照 Hub coordination 与实时 GitHub delivery 状态。
-6. 不再执行已领取任务时，用 `$wuditask-release` 释放 lease。
-7. 验收完成后，用 `$wuditask-archive` 保存 done、failed 或 cancelled 结果和证据。
+3. 用 `$wuditask-check` 检查依赖、GitHub owners、delivery 和 active agents。
+4. 用 `$wuditask-execute` 启动 ready 任务的 agent；自动选择时先取 assigned-to-me 且 idle 的任务，再取 unowned 任务。
+5. 执行中和归档前再次用 `$wuditask-check` 查看统一的只读状态。
+6. 当前 agent 不再执行时，用 `$wuditask-release` 只停止 matching `run_id`；不会取消 GitHub assignment，也不会误停同一 login 后来启动的新 run。
+7. 验收完成后，用 `$wuditask-archive` 保存 done、failed 或 cancelled 结果和证据。done 和仍有 active agents 的终态归档必须传 matching `run_id`；没有 active agent 的 failed/cancelled 只允许 task creator 归档，并且必须省略 run ID。
 
 添加任务时，canonical source 按以下顺序选择：
 
 1. 优先复用执行仓中匹配的 PR。
 2. 其次复用或创建执行仓中的 Issue。
 3. 只有执行仓无法承载描述时，才使用 Task Hub 的 fallback Issue。
-4. 两个仓库都无法承载时，才使用带原因的 text source。
+4. Hub Issue 也无法承载时就停止；WudiTask 不接受本地 text source。
 
-因此 GitHub 自动维护 assignee、关联 PR、review、checks 和关闭状态；WudiTask 只补充执行租约、依赖、验收条件与归档证据。不要手工编辑 Hub 中的 task JSON。
+因此 GitHub assignee 和交付 PR author 表示 owners，并由 GitHub 维护关联 PR、review、checks、验收条件和关闭状态；WudiTask 只补充 `active_agents`、依赖与归档证据。GitHub assignment 不是原子的，真正的执行边界是 `execute` 的普通、非 force Hub push。不要手工编辑 Hub 中的 task JSON。
 
 ## 更新工具
 
@@ -127,7 +127,7 @@ wuditask delete \
 
 ### `gh` 未认证或权限不足
 
-运行 `gh auth status` 和 `gh api user`，确认当前账号对工具仓、Hub 和 canonical Issue 或 PR 都有需要的权限。GitHub API 不可达时，claim 和 done archive 会 fail closed。
+运行 `gh auth status` 和 `gh api user`，确认当前账号对工具仓、Hub 和 canonical Issue 或 PR 都有需要的权限。GitHub API 不可达时，execute、check 和任何 archive 会 fail closed。
 
 ### 找不到 `wuditask` 命令
 
@@ -161,4 +161,4 @@ wuditask delete \
 
 不要猜测远端状态，也不要直接编辑 Hub。使用完全相同的参数重试同一命令，让 WudiTask 从最新远端快照做幂等确认或重新执行全部 guard。
 
-更多背景可查看 [WudiTask 工具仓](https://github.com/ChaoWao/wuditask) 和当前站点的 [任务依赖图](dag.html)。
+更多背景可查看 [WudiTask 工具仓](https://github.com/ChaoWao/wuditask)、当前站点的 [Workflow](workflow.html) 和 [任务依赖图](dag.html)。

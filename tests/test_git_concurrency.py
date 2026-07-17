@@ -6,15 +6,18 @@ import threading
 import unittest
 from pathlib import Path
 from typing import Any
+from unittest.mock import patch
 
 from wuditask.errors import WudiTaskError
 from wuditask.gitops import GitCoordinator
 from wuditask.repository import TaskRepository
-from wuditask.workflow import claim_task, create_task
+from wuditask.workflow import create_task, start_agent
 
 from tests.helpers import (
     ACTOR,
     OTHER_ACTOR,
+    OTHER_RUN_ID,
+    RUN_ID,
     add_task,
     git,
     make_hub_origin,
@@ -27,6 +30,22 @@ SECOND_ID = "WDT-20260711T120001Z-222222"
 
 
 class GitConcurrencyTests(unittest.TestCase):
+    @staticmethod
+    def _delivery() -> dict[str, Any]:
+        return {
+            "status": "fresh",
+            "delivery_state": "assigned",
+            "title": "Canonical task",
+            "body": "Canonical body",
+            "owners": ["alice", "bob"],
+            "assignees": ["alice", "bob"],
+            "prs": [],
+            "updated_at": "2026-07-16T09:00:00Z",
+            "fetched_at": "2026-07-16T10:00:00Z",
+            "error": None,
+            "url": "https://github.com/acme/service/issues/12",
+        }
+
     def setUp(self) -> None:
         self.temporary = tempfile.TemporaryDirectory()
         self.base = Path(self.temporary.name)
@@ -63,6 +82,11 @@ class GitConcurrencyTests(unittest.TestCase):
         self,
         first_target: str,
         second_target: str,
+        *,
+        first_actor: Any = ACTOR,
+        second_actor: Any = OTHER_ACTOR,
+        first_run_id: str = RUN_ID,
+        second_run_id: str = OTHER_RUN_ID,
     ) -> tuple[list[dict[str, Any]], list[Exception]]:
         barrier = threading.Barrier(2)
 
@@ -87,8 +111,8 @@ class GitConcurrencyTests(unittest.TestCase):
             ),
         )
         calls = (
-            (coordinators[0], ACTOR, first_target),
-            (coordinators[1], OTHER_ACTOR, second_target),
+            (coordinators[0], first_actor, first_target, first_run_id),
+            (coordinators[1], second_actor, second_target, second_run_id),
         )
         results: list[dict[str, Any]] = []
         errors: list[Exception] = []
@@ -98,16 +122,18 @@ class GitConcurrencyTests(unittest.TestCase):
             coordinator: GitCoordinator,
             actor: Any,
             target: str,
+            run_id: str,
         ) -> None:
             try:
                 result = coordinator.write(
-                    lambda repository: claim_task(
+                    lambda repository: start_agent(
                         repository,
                         actor,
                         task_id=target,
+                        run_id=run_id,
                     ),
                     actor,
-                    lambda payload: f"wuditask: claim {payload['task_id']}",
+                    lambda payload: f"wuditask: execute {payload['task_id']}",
                 )
                 with lock:
                     results.append(result)
@@ -115,14 +141,18 @@ class GitConcurrencyTests(unittest.TestCase):
                 with lock:
                     errors.append(error)
 
-        threads = [threading.Thread(target=run, args=call) for call in calls]
-        for thread in threads:
-            thread.start()
-        for thread in threads:
-            thread.join(timeout=20)
-            self.assertFalse(
-                thread.is_alive(), "concurrent Git transaction did not finish"
-            )
+        with patch(
+            "wuditask.workflow.fetch_delivery",
+            return_value=self._delivery(),
+        ):
+            threads = [threading.Thread(target=run, args=call) for call in calls]
+            for thread in threads:
+                thread.start()
+            for thread in threads:
+                thread.join(timeout=20)
+                self.assertFalse(
+                    thread.is_alive(), "concurrent Git transaction did not finish"
+                )
         self.assertEqual([], list((self.cache_root / "operations").iterdir()))
         cache_paths = list((self.cache_root / "hubs").glob("*.git"))
         self.assertEqual(1, len(cache_paths))
@@ -151,24 +181,48 @@ class GitConcurrencyTests(unittest.TestCase):
             max(result["sync"]["attempts"] for result in results), 2
         )
         index = self._remote_index()
-        self.assertEqual("alice", index.open[FIRST_ID].task["claim"]["github_login"])
-        self.assertEqual("bob", index.open[SECOND_ID].task["claim"]["github_login"])
+        self.assertEqual(
+            [{"login": "alice", "run_id": RUN_ID}],
+            index.open[FIRST_ID].task["active_agents"],
+        )
+        self.assertEqual(
+            [{"login": "bob", "run_id": OTHER_RUN_ID}],
+            index.open[SECOND_ID].task["active_agents"],
+        )
         authors = git(
             ["log", "-2", "--format=%an", "refs/heads/main"],
             self.origin,
         ).stdout.splitlines()
         self.assertCountEqual(["alice", "bob"], authors)
 
-    def test_same_task_has_exactly_one_confirmed_owner(self) -> None:
+    def test_different_users_can_execute_the_same_task_after_retry(self) -> None:
         results, errors = self._race(FIRST_ID, FIRST_ID)
+        self.assertEqual([], errors)
+        self.assertEqual(2, len(results))
+        self.assertTrue(all(result["sync"]["confirmed"] for result in results))
+        index = self._remote_index()
+        self.assertCountEqual(
+            [
+                {"login": "alice", "run_id": RUN_ID},
+                {"login": "bob", "run_id": OTHER_RUN_ID},
+            ],
+            index.open[FIRST_ID].task["active_agents"],
+        )
+
+    def test_same_user_cannot_execute_the_same_task_twice(self) -> None:
+        results, errors = self._race(
+            FIRST_ID,
+            FIRST_ID,
+            second_actor=ACTOR,
+        )
         self.assertEqual(1, len(results))
-        self.assertTrue(results[0]["sync"]["confirmed"])
         self.assertEqual(1, len(errors))
         self.assertIsInstance(errors[0], WudiTaskError)
-        self.assertEqual("claim_conflict", errors[0].code)
-        index = self._remote_index()
-        claim_holder = index.open[FIRST_ID].task["claim"]["github_login"]
-        self.assertIn(claim_holder, {"alice", "bob"})
+        self.assertEqual("active_agent_conflict", errors[0].code)
+        self.assertEqual(
+            1,
+            len(self._remote_index().open[FIRST_ID].task["active_agents"]),
+        )
 
     def test_accepted_push_with_lost_response_is_reconciled(self) -> None:
         class AmbiguousPushCoordinator(GitCoordinator):
@@ -192,16 +246,89 @@ class GitConcurrencyTests(unittest.TestCase):
             branch="main",
             cache_root=self.cache_root,
         )
-        result = coordinator.write(
-            lambda repository: claim_task(repository, ACTOR, task_id=FIRST_ID),
-            ACTOR,
-            lambda payload: f"wuditask: claim {payload['task_id']}",
-        )
+        with patch(
+            "wuditask.workflow.fetch_delivery",
+            return_value=self._delivery(),
+        ):
+            result = coordinator.write(
+                lambda repository: start_agent(
+                    repository,
+                    ACTOR,
+                    task_id=FIRST_ID,
+                    run_id=RUN_ID,
+                ),
+                ACTOR,
+                lambda payload: f"wuditask: execute {payload['task_id']}",
+            )
         self.assertTrue(result["sync"]["confirmed"])
-        self.assertEqual("remote_reconciliation", result["sync"]["confirmation"])
+        self.assertEqual("commit_ancestry", result["sync"]["confirmation"])
         self.assertEqual(
-            "alice",
-            self._remote_index().open[FIRST_ID].task["claim"]["github_login"],
+            [{"login": "alice", "run_id": RUN_ID}],
+            self._remote_index().open[FIRST_ID].task["active_agents"],
+        )
+
+    def test_lost_response_is_confirmed_after_follow_on_same_task_update(self) -> None:
+        outer = self
+
+        class FollowOnPushCoordinator(GitCoordinator):
+            followed_on = False
+
+            def _push(self, checkout: Path) -> subprocess.CompletedProcess[str]:
+                accepted = super()._push(checkout)
+                if accepted.returncode != 0:
+                    raise AssertionError(accepted.stderr)
+                if not self.followed_on:
+                    self.followed_on = True
+                    follower = GitCoordinator(
+                        remote=str(outer.origin),
+                        branch="main",
+                        cache_root=outer.cache_root,
+                    )
+                    follower.write(
+                        lambda repository: start_agent(
+                            repository,
+                            OTHER_ACTOR,
+                            task_id=FIRST_ID,
+                            run_id=OTHER_RUN_ID,
+                        ),
+                        OTHER_ACTOR,
+                        lambda payload: f"wuditask: execute {payload['task_id']}",
+                    )
+                return subprocess.CompletedProcess(
+                    accepted.args,
+                    1,
+                    stdout=accepted.stdout,
+                    stderr="simulated connection reset after follow-on update",
+                )
+
+        coordinator = FollowOnPushCoordinator(
+            remote=str(self.origin),
+            branch="main",
+            cache_root=self.cache_root,
+        )
+        with patch(
+            "wuditask.workflow.fetch_delivery",
+            return_value=self._delivery(),
+        ):
+            result = coordinator.write(
+                lambda repository: start_agent(
+                    repository,
+                    ACTOR,
+                    task_id=FIRST_ID,
+                    run_id=RUN_ID,
+                ),
+                ACTOR,
+                lambda payload: f"wuditask: execute {payload['task_id']}",
+            )
+
+        self.assertEqual("commit_ancestry", result["sync"]["confirmation"])
+        self.assertNotEqual(result["sync"]["commit"], result["sync"]["remote_head"])
+        self.assertCountEqual(
+            [
+                {"login": "alice", "run_id": RUN_ID},
+                {"login": "bob", "run_id": OTHER_RUN_ID},
+            ],
+            self._remote_index().open[FIRST_ID].task["active_agents"],
         )
 
     def test_hub_push_command_never_forces_remote_history(self) -> None:

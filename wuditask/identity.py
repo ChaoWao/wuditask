@@ -12,24 +12,14 @@ from .util import repo_from_remote
 
 
 def _parse_actor(value: str) -> Identity:
-    login, separator, raw_id = value.partition(":")
-    if not separator or not login.strip():
+    login = value.strip()
+    if not login or ":" in login:
         raise WudiTaskError(
             "invalid_actor",
-            "Actor override must use login:numeric-id form.",
+            "Actor override must be a GitHub login.",
             details={"value": value},
         )
-    try:
-        github_id = int(raw_id)
-    except ValueError as exc:
-        raise WudiTaskError(
-            "invalid_actor",
-            "Actor override must use login:numeric-id form.",
-            details={"value": value},
-        ) from exc
-    if github_id <= 0:
-        raise WudiTaskError("invalid_actor", "GitHub ID must be positive.")
-    return Identity(login=login.strip(), github_id=github_id)
+    return Identity(login=login)
 
 
 def resolve_identity(actor_override: str | None = None) -> Identity:
@@ -60,17 +50,16 @@ def resolve_identity(actor_override: str | None = None) -> Identity:
     try:
         payload = json.loads(process.stdout)
         login = payload["login"]
-        github_id = payload["id"]
     except (json.JSONDecodeError, KeyError, TypeError) as exc:
         raise WudiTaskError(
             "gh_identity_invalid",
             "GitHub CLI returned an invalid user record.",
         ) from exc
-    if not isinstance(login, str) or not login or not isinstance(github_id, int):
+    if not isinstance(login, str) or not login.strip():
         raise WudiTaskError(
             "gh_identity_invalid", "GitHub CLI returned an invalid user record."
         )
-    return Identity(login=login, github_id=github_id)
+    return Identity(login=login)
 
 
 def detect_current_repo(cwd: Path | None = None) -> str | None:

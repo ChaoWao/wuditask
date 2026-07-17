@@ -248,10 +248,7 @@ class GitCoordinator:
                         "-c",
                         f"user.name={actor.login}",
                         "-c",
-                        (
-                            "user.email="
-                            f"{actor.github_id}+{actor.login}@users.noreply.github.com"
-                        ),
+                        f"user.email={actor.login}@users.noreply.github.com",
                         "commit",
                         "-m",
                         commit_message(result),
@@ -276,25 +273,23 @@ class GitCoordinator:
                     }
                     return result
                 combined = f"{push.stdout}\n{push.stderr}".strip()
+                remote_head = self._remote_head_containing(commit)
+                if remote_head is not None:
+                    result["sync"] = {
+                        "mode": "remote",
+                        "confirmed": True,
+                        "confirmation": "commit_ancestry",
+                        "attempts": attempt,
+                        "remote": self.remote,
+                        "branch": self.branch,
+                        "commit": commit,
+                        "remote_head": remote_head,
+                    }
+                    return result
                 if self._is_non_fast_forward(combined):
                     last_rejection = combined
                     time.sleep(0.04 * attempt)
                     continue
-                if self._remote_matches(result):
-                    confirmed_commit = result.pop(
-                        "_remote_confirmation_commit",
-                        commit,
-                    )
-                    result["sync"] = {
-                        "mode": "remote",
-                        "confirmed": True,
-                        "confirmation": "remote_reconciliation",
-                        "attempts": attempt,
-                        "remote": self.remote,
-                        "branch": self.branch,
-                        "commit": confirmed_commit,
-                    }
-                    return result
                 raise WudiTaskError(
                     "push_status_unknown",
                     "The ordinary push did not complete; do not start or finish task work yet.",
@@ -309,12 +304,7 @@ class GitCoordinator:
                             if isinstance(result.get("deletion_receipt"), dict)
                             else None
                         ),
-                        "claim_token": (
-                            result.get("task", {}).get("claim", {}).get("token")
-                            if isinstance(result.get("task"), dict)
-                            and isinstance(result.get("task", {}).get("claim"), dict)
-                            else None
-                        ),
+                        "run_id": result.get("run_id"),
                         "action": "Retry the same command to confirm remote state.",
                     },
                     exit_code=4,
@@ -645,50 +635,22 @@ class GitCoordinator:
             allowed=None,
         )
 
-    def _remote_matches(self, result: dict[str, Any]) -> bool:
-        expected = result.get("task")
-        task_id = result.get("task_id")
-        deleted_task_ids = result.get("deleted_task_ids")
-        deletion_receipt = result.get("deletion_receipt")
-        expects_deletion = (
-            isinstance(deleted_task_ids, list)
-            and bool(deleted_task_ids)
-            and all(isinstance(value, str) for value in deleted_task_ids)
-            and isinstance(deletion_receipt, dict)
-            and isinstance(deletion_receipt.get("id"), str)
-        )
-        expects_task = isinstance(expected, dict) and isinstance(task_id, str)
-        if not expects_task and not expects_deletion:
-            return False
+    def _remote_head_containing(self, commit: str) -> str | None:
         try:
             with self._remote_worktree("confirm") as checkout:
-                index = TaskRepository(checkout).load_index()
-                if expects_deletion:
-                    repository = TaskRepository(checkout)
-                    receipts = repository.load_deletion_receipts()
-                    remote_receipt = receipts.get(deletion_receipt["id"])
-                    if remote_receipt is None or not all(
-                        index.get(value) is None for value in deleted_task_ids
-                    ):
-                        return False
-                    result["deletion_receipt"] = remote_receipt
-                    result["deleted_by"] = remote_receipt["deleted_by"]
-                    result["reason"] = remote_receipt["reason"]
-                    result["_remote_confirmation_commit"] = self._run(
-                        ["git", "rev-parse", "HEAD"],
-                        cwd=checkout,
-                    ).stdout.strip()
-                    return True
-                record = index.get(task_id)
-                if record is None or record.task != expected:
-                    return False
-                result["_remote_confirmation_commit"] = self._run(
+                contained = self._run(
+                    ["git", "merge-base", "--is-ancestor", commit, "HEAD"],
+                    cwd=checkout,
+                    allowed={0, 1},
+                )
+                if contained.returncode != 0:
+                    return None
+                return self._run(
                     ["git", "rev-parse", "HEAD"],
                     cwd=checkout,
                 ).stdout.strip()
-                return True
         except WudiTaskError:
-            return False
+            return None
 
     @staticmethod
     def _is_non_fast_forward(output: str) -> bool:

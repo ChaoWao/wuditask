@@ -16,15 +16,16 @@ from .validation import validate_repository
 REQUIRED_SKILL_NAMES = {
     "wuditask-add",
     "wuditask-archive",
+    "wuditask-assign",
+    "wuditask-check",
     "wuditask-delete",
-    "wuditask-dep-check",
     "wuditask-execute",
     "wuditask-install",
     "wuditask-list",
-    "wuditask-reconcile",
     "wuditask-release",
     "wuditask-selfupdate",
     "wuditask-show",
+    "wuditask-unassign",
 }
 
 

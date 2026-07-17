@@ -67,4 +67,7 @@ Treat `$wuditask-selfupdate fix <request>` or `/wuditask-selfupdate fix <request
 8. After an ordinary fast-forward reaches the configured tool branch, run installed-clone self-update, reconcile installation if `reinstall_required=true`, and confirm the new commit and skill links. If this maintenance explicitly rewrote the configured tool branch, ordinary self-update must remain fail closed on the resulting divergence. Report the exact local, replaced, and remote OIDs and request separate explicit approval before resetting, replacing, or recloning the installed clone; force-push authorization alone never authorizes those actions.
 9. Remove the clean merged worktree and local branch only after the installed state is confirmed. If a configured-branch rewrite leaves installation recovery unresolved, keep the worktree until recovery receives separate approval or the work is explicitly handed off. Then return to the original repository and state.
 
-Do not create a GitHub Issue for this maintenance request. Do not run WudiTask `add`, `execute`, `archive`, `delete`, or `release` for the maintenance itself. A PR is created only when code review or branch protection requires it.
+Do not create a GitHub Issue for this maintenance request. Do not run WudiTask
+`add`, `assign`, `execute`, `release`, `unassign`, `archive`, or `delete` for
+the maintenance itself. A PR is created only when code review or branch
+protection requires it.

@@ -1,0 +1,4 @@
+interface:
+  display_name: "Check WudiTask"
+  short_description: "Inspect readiness and live coordination state"
+  default_prompt: "Use $wuditask-check to inspect readiness, owners, active agents, and delivery without mutation."

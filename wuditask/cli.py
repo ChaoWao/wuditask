@@ -4,27 +4,25 @@ import argparse
 import json
 import re
 import sys
+from copy import deepcopy
 from pathlib import Path
 from typing import Any, Sequence
 
 from . import __version__
 from .configuration import load_config
-from .dependencies import dependency_report
+from .dependencies import task_dependency_report
 from .errors import WudiTaskError
-from .github_delivery import (
-    actor_eligibility,
-    fetch_delivery,
-    update_issue_assignee,
-)
+from .github_delivery import fetch_delivery, update_source_assignee
 from .gitops import GitCoordinator
 from .identity import detect_current_repo, resolve_identity
 from .install import install_agent_access
-from .model import claim_identity, claim_matches_identity
-from .repository import TaskRepository
+from .model import Identity
+from .repository import TaskIndex, TaskRecord, TaskRepository
 from .selfupdate import self_update
 from .site_builder import build_site
 from .util import (
     TASK_ID_RE,
+    new_run_id,
     new_task_id,
     normalize_repo,
     read_json,
@@ -35,103 +33,26 @@ from .util import (
 from .validation import validate_repository
 from .workflow import (
     archive_task,
-    claim_task,
     create_task,
     delete_archived_tasks,
-    release_task,
+    release_agent,
+    start_agent,
 )
 
+
 HELP_COMMANDS = {
-    "add": {
-        "purpose": "Add a fully specified task for a GitHub work repository.",
-        "usage": "wuditask add --source ISSUE_OR_PR_URL --title TEXT --goal TEXT --accept TEXT [--verify type::value] [--depends TASK_ID]",
-        "agent_usage": {
-            "codex": "$wuditask-add",
-            "claude": "/wuditask-add",
-        },
-    },
-    "execute": {
-        "purpose": "Claim one unowned task whose dependencies are complete.",
-        "usage": "wuditask execute [TASK_ID] [--repo owner/name]",
-        "agent_usage": {
-            "codex": "$wuditask-execute",
-            "claude": "/wuditask-execute",
-        },
-    },
-    "dep-check": {
-        "purpose": "Expand dependencies and explain whether work is ready.",
-        "usage": "wuditask dep-check [TASK_ID]",
-        "agent_usage": {
-            "codex": "$wuditask-dep-check",
-            "claude": "/wuditask-dep-check",
-        },
-    },
-    "archive": {
-        "purpose": "Archive claimed work with an outcome and acceptance evidence.",
-        "usage": "wuditask archive TASK_ID --outcome done --result TEXT --evidence AC-N=TEXT",
-        "agent_usage": {
-            "codex": "$wuditask-archive",
-            "claude": "/wuditask-archive",
-        },
-    },
-    "delete": {
-        "purpose": "Delete explicitly identified erroneous archived records.",
-        "usage": "wuditask delete TASK_ID [TASK_ID ...] --reason TEXT",
-        "agent_usage": {
-            "codex": "$wuditask-delete",
-            "claude": "/wuditask-delete",
-        },
-    },
-    "release": {
-        "purpose": "Return a task owned by the current GitHub user to the queue.",
-        "usage": "wuditask release TASK_ID --reason TEXT",
-        "agent_usage": {
-            "codex": "$wuditask-release",
-            "claude": "/wuditask-release",
-        },
-    },
-    "list": {
-        "purpose": "List open, archived, or all tasks.",
-        "usage": "wuditask list [--scope open|archive|all] [--repo owner/name]",
-        "agent_usage": {
-            "codex": "$wuditask-list",
-            "claude": "/wuditask-list",
-        },
-    },
-    "show": {
-        "purpose": "Show one task and its derived dependency state.",
-        "usage": "wuditask show TASK_ID",
-        "agent_usage": {
-            "codex": "$wuditask-show",
-            "claude": "/wuditask-show",
-        },
-    },
-    "reconcile": {
-        "purpose": "Compare WudiTask coordination with live GitHub delivery state.",
-        "usage": "wuditask reconcile [TASK_ID]",
-        "agent_usage": {
-            "codex": "$wuditask-reconcile",
-            "claude": "/wuditask-reconcile",
-        },
-    },
-    "install": {
-        "purpose": "Register the tool clone and a separate task Hub remote.",
-        "usage": "wuditask install --hub-remote URL [--hub-branch BRANCH] [--home PATH] [--replace]",
-        "agent_usage": {
-            "codex": "$wuditask-install",
-            "claude": "/wuditask-install",
-        },
-    },
-    "selfupdate": {
-        "purpose": "Safely update the installed tool clone or maintain WudiTask.",
-        "usage": "wuditask selfupdate [--check]",
-        "agent_usage": {
-            "codex": "$wuditask-selfupdate",
-            "claude": "/wuditask-selfupdate",
-            "codex_fix": "$wuditask-selfupdate fix <request>",
-            "claude_fix": "/wuditask-selfupdate fix <request>",
-        },
-    },
+    "add": ("Add a GitHub-backed task reference.", "$wuditask-add"),
+    "assign": ("Assign GitHub responsibility without starting work.", "$wuditask-assign"),
+    "check": ("Read current dependencies, owners, agents, and delivery.", "$wuditask-check"),
+    "execute": ("Start one confirmed agent run on ready work.", "$wuditask-execute"),
+    "release": ("Stop one exact agent run without unassigning.", "$wuditask-release"),
+    "unassign": ("Remove GitHub responsibility after agents stop.", "$wuditask-unassign"),
+    "archive": ("Archive a terminal outcome with evidence.", "$wuditask-archive"),
+    "delete": ("Delete explicitly identified erroneous archive records.", "$wuditask-delete"),
+    "list": ("List queue entries with live GitHub state.", "$wuditask-list"),
+    "show": ("Show one task and both sources of truth.", "$wuditask-show"),
+    "install": ("Install the tool and separate Hub access.", "$wuditask-install"),
+    "selfupdate": ("Update or directly maintain WudiTask.", "$wuditask-selfupdate"),
 }
 
 GITHUB_SOURCE_URL_RE = re.compile(
@@ -139,6 +60,8 @@ GITHUB_SOURCE_URL_RE = re.compile(
     r"(?P<repo>[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)/"
     r"(?P<kind>issues|pull)/(?P<number>[1-9][0-9]*)/?$"
 )
+GITHUB_LOGIN_RE = re.compile(r"^[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?$")
+TERMINAL_DELIVERY_STATES = {"verification_needed", "cancelled"}
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -152,144 +75,90 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--hub",
         type=Path,
-        help="Path to a local task Hub checkout; requires --local.",
+        help="Path to an explicit local Hub checkout; requires --local.",
     )
     parser.add_argument(
         "--local",
         action="store_true",
-        help="Read and write the explicit --hub checkout only.",
+        help="Read or perform supported development writes in --hub only.",
     )
     parser.add_argument("--json", action="store_true", help="Emit stable JSON output.")
-    parser.add_argument(
-        "--actor",
-        help=argparse.SUPPRESS,
-    )
+    parser.add_argument("--actor", help=argparse.SUPPRESS)
     commands = parser.add_subparsers(dest="command", required=True)
 
-    add = commands.add_parser("add", help="Add a fully specified task.")
-    add.add_argument("--spec", type=str, help="JSON spec path, or - for stdin.")
-    add.add_argument(
-        "--id", dest="task_id", help="Explicit task ID for idempotent automation."
-    )
-    add.add_argument("--title")
-    add.add_argument("--repo", help="Target GitHub repository in owner/name form.")
-    add.add_argument("--goal")
-    add.add_argument("--context", action="append")
-    add.add_argument(
-        "--accept", action="append", help="Acceptance criterion; repeat as needed."
-    )
-    add.add_argument(
-        "--verify",
-        action="append",
-        help="Matching verification as type::value; repeat in --accept order.",
-    )
-    add.add_argument(
-        "--depends", action="append", help="Dependency task ID; repeat as needed."
-    )
+    add = commands.add_parser("add", help="Add a canonical GitHub task reference.")
+    add.add_argument("--spec", help="JSON spec path, or - for stdin.")
+    add.add_argument("--id", dest="task_id")
+    add.add_argument("--repo", help="Execution repository in owner/name form.")
+    add.add_argument("--source", help="Canonical GitHub Issue or PR URL.")
+    add.add_argument("--source-fallback-reason")
+    add.add_argument("--depends", action="append")
     add.add_argument("--priority", choices=("P0", "P1", "P2", "P3"))
-    add.add_argument(
-        "--source",
-        help="Canonical GitHub Issue or PR URL.",
-    )
-    add.add_argument(
-        "--source-fallback-reason",
-        help="Why the canonical GitHub source is outside the execution repository.",
-    )
-    add.add_argument(
-        "--text-source-reason",
-        help="Why no GitHub Issue or PR can carry the canonical narrative.",
-    )
-    add.add_argument("--link", action="append")
 
-    execute = commands.add_parser("execute", help="Claim one ready, unowned task.")
+    assign = commands.add_parser("assign", help="Add a canonical GitHub assignee.")
+    assign.add_argument("task_id")
+    assign.add_argument("--to", dest="target_login")
+
+    unassign = commands.add_parser(
+        "unassign", help="Remove a canonical GitHub assignee."
+    )
+    unassign.add_argument("task_id")
+    unassign.add_argument("--from", dest="target_login")
+
+    execute = commands.add_parser("execute", help="Start one ready agent run.")
     execute.add_argument("task_id", nargs="?")
     execute.add_argument(
-        "--repo", help="Target repository; defaults to the current Git remote."
+        "--repo", help="Execution repository; defaults to the current Git remote."
     )
 
-    archive = commands.add_parser(
-        "archive", help="Record a terminal task outcome in the archive."
-    )
+    release = commands.add_parser("release", help="Stop one exact agent run.")
+    release.add_argument("task_id")
+    release.add_argument("--run-id", required=True)
+    release.add_argument("--reason")
+
+    archive = commands.add_parser("archive", help="Archive a terminal task outcome.")
     archive.add_argument("task_id")
+    archive.add_argument("--run-id")
     archive.add_argument(
         "--outcome", choices=("done", "failed", "cancelled"), default="done"
     )
-    archive.add_argument("--result")
-    archive.add_argument(
-        "--evidence",
-        action="append",
-        help="Acceptance evidence in AC-N=text form; repeat for each criterion.",
-    )
+    archive.add_argument("--result", required=True)
+    archive.add_argument("--evidence", action="append")
 
     delete = commands.add_parser(
         "delete", help="Delete erroneous archived task records."
     )
     delete.add_argument("task_ids", nargs="+")
-    delete.add_argument("--reason")
+    delete.add_argument("--reason", required=True)
 
-    release = commands.add_parser("release", help="Return an owned task to the queue.")
-    release.add_argument("task_id")
-    release.add_argument("--reason")
-
-    dep_check = commands.add_parser(
-        "dep-check",
-        help="Expand dependencies and report readiness.",
-    )
-    dep_check.add_argument("task_id", nargs="?")
+    check = commands.add_parser("check", help="Check latest Hub and GitHub state.")
+    check.add_argument("task_id", nargs="?")
+    check.add_argument("--repo")
 
     list_command = commands.add_parser("list", help="List open or archived tasks.")
     list_command.add_argument(
-        "--scope",
-        choices=("open", "archive", "all"),
-        default="open",
+        "--scope", choices=("open", "archive", "all"), default="open"
     )
     list_command.add_argument("--repo")
 
-    show = commands.add_parser(
-        "show", help="Show one task with derived dependency state."
-    )
+    show = commands.add_parser("show", help="Show one task.")
     show.add_argument("task_id")
 
-    reconcile = commands.add_parser(
-        "reconcile",
-        help="Compare queue coordination with canonical GitHub delivery.",
-    )
-    reconcile.add_argument("task_id", nargs="?")
+    commands.add_parser("validate", help="Validate Hub data and dependencies.")
+    site = commands.add_parser("build-site", help="Build the GitHub Pages artifact.")
+    site.add_argument("--output", type=Path, default=Path("_site"))
 
-    commands.add_parser(
-        "validate", help="Validate all task files and dependency references."
-    )
-
-    build = commands.add_parser(
-        "build-site", help="Build the static GitHub Pages artifact."
-    )
-    build.add_argument("--output", type=Path, default=Path("_site"))
-
-    install = commands.add_parser(
-        "install", help="Register this tool clone and a task Hub remote."
-    )
+    install = commands.add_parser("install", help="Register tool and Hub remotes.")
     install.add_argument("--home", type=Path)
     install.add_argument("--replace", action="store_true")
     install.add_argument("--hub-remote", required=True)
     install.add_argument("--hub-branch", default="main")
 
-    selfupdate = commands.add_parser(
-        "selfupdate", help="Safely fast-forward this WudiTask clone."
-    )
-    selfupdate.add_argument(
-        "--check",
-        action="store_true",
-        help="Fetch and report update state without changing the clone.",
-    )
+    update = commands.add_parser("selfupdate", help="Fast-forward the installed tool.")
+    update.add_argument("--check", action="store_true")
 
-    help_command = commands.add_parser(
-        "help", help="Show workflow and command examples."
-    )
-    help_command.add_argument(
-        "topic",
-        nargs="?",
-        choices=("workflow", *HELP_COMMANDS),
-    )
+    help_command = commands.add_parser("help", help="Show workflow help.")
+    help_command.add_argument("topic", nargs="?", choices=("workflow", *HELP_COMMANDS))
     return parser
 
 
@@ -302,24 +171,13 @@ def _read_spec(path: str | None) -> dict[str, Any]:
         except json.JSONDecodeError as exc:
             raise WudiTaskError(
                 "invalid_json",
-                f"Invalid JSON from stdin at line {exc.lineno}, column {exc.colno}.",
+                f"Invalid JSON at line {exc.lineno}, column {exc.colno}.",
             ) from exc
     else:
         value = read_json(Path(path))
     if not isinstance(value, dict):
         raise WudiTaskError("invalid_task_spec", "Task spec must be a JSON object.")
     return value
-
-
-def _verification(value: str) -> dict[str, str]:
-    verification_type, separator, detail = value.partition("::")
-    if not separator or not verification_type.strip() or not detail.strip():
-        raise WudiTaskError(
-            "invalid_verification",
-            "Verification must use type::value form.",
-            details={"value": value, "types": ["command", "file", "manual", "url"]},
-        )
-    return {"type": verification_type.strip(), "value": detail.strip()}
 
 
 def _github_source(value: str) -> dict[str, Any]:
@@ -332,7 +190,9 @@ def _github_source(value: str) -> dict[str, Any]:
         )
     return {
         "kind": (
-            "github_issue" if match.group("kind") == "issues" else "github_pull_request"
+            "github_issue"
+            if match.group("kind") == "issues"
+            else "github_pull_request"
         ),
         "repo": normalize_repo(match.group("repo")),
         "number": int(match.group("number")),
@@ -341,36 +201,20 @@ def _github_source(value: str) -> dict[str, Any]:
 
 def _add_spec(args: argparse.Namespace) -> dict[str, Any]:
     spec = _read_spec(args.spec)
-    direct = {
-        "title": args.title,
-        "repo": args.repo,
-        "goal": args.goal,
-        "context": args.context,
-        "dependencies": args.depends,
-        "priority": args.priority,
-        "links": args.link,
-    }
-    for key, value in direct.items():
-        if value is not None:
-            spec[key] = value
-    if args.source and args.text_source_reason:
-        raise WudiTaskError(
-            "multiple_task_sources",
-            "Choose either a GitHub source or an explained text source.",
-        )
-    if args.source:
+    if args.repo is not None:
+        spec["repo"] = args.repo
+    if args.source is not None:
         spec["source"] = _github_source(args.source)
-    if args.text_source_reason:
-        spec["source"] = {
-            "kind": "text",
-            "reason": args.text_source_reason.strip(),
-        }
-    if args.source_fallback_reason:
+    if args.depends is not None:
+        spec["dependencies"] = args.depends
+    if args.priority is not None:
+        spec["priority"] = args.priority
+    if args.source_fallback_reason is not None:
         source = spec.get("source")
         if not isinstance(source, dict) or source.get("kind") != "github_issue":
             raise WudiTaskError(
-                "fallback_reason_without_github_source",
-                "--source-fallback-reason requires a GitHub Issue source.",
+                "fallback_reason_without_issue",
+                "--source-fallback-reason requires an Issue source.",
             )
         source["kind"] = "github_issue_fallback"
         source["fallback_reason"] = args.source_fallback_reason.strip()
@@ -378,53 +222,7 @@ def _add_spec(args: argparse.Namespace) -> dict[str, Any]:
         detected = detect_current_repo()
         if detected:
             spec["repo"] = detected
-    if args.accept is not None:
-        verifications = args.verify or []
-        if len(verifications) > len(args.accept):
-            raise WudiTaskError(
-                "verification_count_mismatch",
-                "There cannot be more --verify values than --accept values.",
-            )
-        criteria = []
-        for index, description in enumerate(args.accept):
-            verification = (
-                _verification(verifications[index])
-                if index < len(verifications)
-                else {"type": "manual", "value": description}
-            )
-            criteria.append(
-                {
-                    "description": description,
-                    "verification": verification,
-                }
-            )
-        spec["acceptance_criteria"] = criteria
-    elif args.verify:
-        raise WudiTaskError(
-            "verification_without_criterion",
-            "--verify requires matching --accept values.",
-        )
     return spec
-
-
-def _evidence(values: list[str] | None) -> dict[str, str]:
-    result: dict[str, str] = {}
-    for value in values or []:
-        criterion_id, separator, text = value.partition("=")
-        if not separator or not criterion_id.strip() or not text.strip():
-            raise WudiTaskError(
-                "invalid_evidence",
-                "Evidence must use AC-N=text form.",
-                details={"value": value},
-            )
-        criterion_id = criterion_id.strip()
-        if criterion_id in result:
-            raise WudiTaskError(
-                "duplicate_evidence",
-                f"Evidence for {criterion_id} was provided more than once.",
-            )
-        result[criterion_id] = text.strip()
-    return result
 
 
 def _validate_add_source(task: dict[str, Any], hub_repo: str | None) -> None:
@@ -433,32 +231,22 @@ def _validate_add_source(task: dict[str, Any], hub_repo: str | None) -> None:
         if hub_repo is None:
             raise WudiTaskError(
                 "hub_repository_unknown",
-                "A fallback Issue requires a GitHub-backed configured Hub repository.",
-                details={"source": source},
+                "A fallback Issue requires a GitHub-backed configured Hub.",
             )
         if source["repo"].casefold() != hub_repo.casefold():
             raise WudiTaskError(
                 "invalid_fallback_repository",
                 "A fallback Issue must belong to the configured WudiTask Hub.",
-                details={
-                    "source_repo": source["repo"],
-                    "configured_hub_repo": hub_repo,
-                },
+                details={"source_repo": source["repo"], "hub_repo": hub_repo},
             )
-    if source["kind"] == "text":
-        return
     delivery = fetch_delivery(source)
-    if delivery["status"] != "fresh":
+    if delivery.get("status") != "fresh":
         raise WudiTaskError(
             "github_source_unavailable",
             "The canonical GitHub Issue or pull request could not be verified.",
             details={"source": source, "delivery": delivery},
             exit_code=3,
         )
-
-
-def _issue_source(source: dict[str, Any]) -> bool:
-    return source.get("kind") in {"github_issue", "github_issue_fallback"}
 
 
 def _login_in(values: object, login: str) -> bool:
@@ -468,344 +256,537 @@ def _login_in(values: object, login: str) -> bool:
     )
 
 
-def _actor_owns_active_pr(delivery: dict[str, Any], login: str) -> bool:
-    for pr in delivery.get("prs") or []:
-        if not isinstance(pr, dict) or pr.get("state") != "OPEN":
-            continue
-        author = pr.get("author")
-        if isinstance(author, str) and author.casefold() == login.casefold():
-            return True
-        if _login_in(pr.get("assignees"), login):
-            return True
-    return False
-
-
-def _claim_compensation(
-    coordinator: GitCoordinator,
-    actor: Any,
-    claimed: dict[str, Any],
-    *,
-    reason: str,
-    remove_assignment: bool,
-) -> dict[str, Any]:
-    source = claimed["task"]["source"]
-    removal: dict[str, Any] = {
-        "status": "not_needed",
-        "changed": False,
-        "error": None,
-    }
-    if remove_assignment:
-        removal = update_issue_assignee(source, actor.login, add=False)
-        if removal["status"] != "updated":
-            return {
-                "confirmed": False,
-                "assignment_removal": removal,
-                "lease": "retained",
-            }
-    token = claimed["task"]["claim"]["token"]
-    try:
-        released = coordinator.write(
-            lambda repository: release_task(
-                repository,
-                actor,
-                claimed["task_id"],
-                reason=reason,
-                expected_claim_token=token,
-            ),
-            actor,
-            lambda result: (
-                f"wuditask: release {result['task_id']} - GitHub claim reconciliation"
-            ),
+def _target_login(value: str) -> str:
+    login = value.strip()
+    if not GITHUB_LOGIN_RE.fullmatch(login):
+        raise WudiTaskError(
+            "invalid_github_login",
+            "GitHub login must contain only letters, numbers, and internal hyphens.",
+            details={"value": value},
         )
-    except WudiTaskError as error:
-        return {
-            "confirmed": False,
-            "assignment_removal": removal,
-            "lease": "retained_or_unknown",
-            "release_error": error.as_dict()["error"],
-        }
-    return {
-        "confirmed": True,
-        "assignment_removal": removal,
-        "release": released,
-    }
+    return login
 
 
-def _claim_reconciliation_error(
-    claimed: dict[str, Any],
-    *,
-    message: str,
-    delivery: dict[str, Any],
-    eligibility: dict[str, Any],
-    compensation: dict[str, Any] | None = None,
-) -> WudiTaskError:
-    details: dict[str, Any] = {
-        "task_id": claimed["task_id"],
-        "delivery": delivery,
-        "eligibility": eligibility,
-    }
-    if compensation is not None:
-        details["compensation"] = compensation
-    if compensation is None or not compensation.get("confirmed"):
-        return WudiTaskError(
-            "github_claim_reconciliation_required",
-            f"{message} The execution lease was retained because cleanup was not requested or could not be confirmed.",
-            details=details,
+def _active_for(task: dict[str, Any], login: str) -> dict[str, str] | None:
+    return next(
+        (
+            agent
+            for agent in task.get("active_agents", [])
+            if isinstance(agent, dict)
+            and isinstance(agent.get("login"), str)
+            and agent["login"].casefold() == login.casefold()
+        ),
+        None,
+    )
+
+
+def _task_snapshot(coordinator: GitCoordinator, task_id: str) -> dict[str, Any]:
+    with coordinator.snapshot() as repository:
+        index = repository.load_index()
+        if task_id in index.archived:
+            raise WudiTaskError(
+                "task_already_archived",
+                f"Task {task_id} has already been archived.",
+                details={"task_id": task_id},
+                exit_code=3,
+            )
+        record = index.open.get(task_id)
+        if record is None:
+            raise WudiTaskError(
+                "task_not_found",
+                f"Task {task_id} does not exist.",
+                details={"task_id": task_id},
+            )
+        return deepcopy(record.task)
+
+
+def _require_fresh_delivery(task_id: str, task: dict[str, Any]) -> dict[str, Any]:
+    delivery = fetch_delivery(task["source"])
+    if delivery.get("status") != "fresh":
+        raise WudiTaskError(
+            "github_delivery_unavailable",
+            f"Task {task_id} cannot be changed while GitHub is unavailable.",
+            details={"task_id": task_id, "delivery": delivery},
             exit_code=3,
         )
-    return WudiTaskError(
-        "github_claim_reconciliation_failed",
-        f"{message} The execution lease was released.",
-        details=details,
+    return delivery
+
+
+def _assign_task(
+    coordinator: GitCoordinator,
+    actor: Identity,
+    task_id: str,
+    target_login: str,
+) -> dict[str, Any]:
+    task = _task_snapshot(coordinator, task_id)
+    delivery = _require_fresh_delivery(task_id, task)
+    if delivery.get("delivery_state") in TERMINAL_DELIVERY_STATES:
+        raise WudiTaskError(
+            "delivery_not_assignable",
+            f"Task {task_id} has terminal GitHub delivery.",
+            details={"task_id": task_id, "delivery": delivery},
+            exit_code=3,
+        )
+    if _login_in(delivery.get("owners"), target_login):
+        return {
+            "task_id": task_id,
+            "target_login": target_login,
+            "assigned_by": actor.login,
+            "confirmed": True,
+            "changed": False,
+            "already_owner": True,
+            "delivery": delivery,
+            "message": f"{target_login} is already an owner of {task_id}.",
+        }
+    mutation = update_source_assignee(task["source"], target_login, add=True)
+    if mutation.get("status") != "updated":
+        raise WudiTaskError(
+            "github_assignment_failed",
+            f"Could not assign {target_login} to {task_id}.",
+            details={"task_id": task_id, "assignment": mutation},
+            exit_code=3,
+        )
+    refreshed = _require_fresh_delivery(task_id, task)
+    if not _login_in(refreshed.get("assignees"), target_login) or not _login_in(
+        refreshed.get("owners"), target_login
+    ):
+        raise WudiTaskError(
+            "github_assignment_unconfirmed",
+            f"GitHub did not confirm {target_login} as an assignee and owner.",
+            details={"task_id": task_id, "delivery": refreshed},
+            exit_code=3,
+        )
+    return {
+        "task_id": task_id,
+        "target_login": target_login,
+        "assigned_by": actor.login,
+        "confirmed": True,
+        "changed": True,
+        "already_owner": False,
+        "delivery": refreshed,
+        "github_assignment": mutation,
+        "message": f"Assigned {target_login} to {task_id}.",
+    }
+
+
+def _unassign_task(
+    coordinator: GitCoordinator,
+    actor: Identity,
+    task_id: str,
+    target_login: str,
+) -> dict[str, Any]:
+    task = _task_snapshot(coordinator, task_id)
+    active = _active_for(task, target_login)
+    if active is not None:
+        raise WudiTaskError(
+            "active_agent_prevents_unassign",
+            f"{target_login} still has an active agent run on {task_id}.",
+            details={"task_id": task_id, "active_agent": active},
+            exit_code=3,
+        )
+    delivery = _require_fresh_delivery(task_id, task)
+    if not _login_in(delivery.get("assignees"), target_login):
+        return {
+            "task_id": task_id,
+            "target_login": target_login,
+            "unassigned_by": actor.login,
+            "confirmed": True,
+            "changed": False,
+            "already_unassigned": True,
+            "still_owner": _login_in(delivery.get("owners"), target_login),
+            "delivery": delivery,
+            "message": f"{target_login} is not an assignee of {task_id}.",
+        }
+    mutation = update_source_assignee(task["source"], target_login, add=False)
+    if mutation.get("status") != "updated":
+        raise WudiTaskError(
+            "github_unassignment_failed",
+            f"Could not unassign {target_login} from {task_id}.",
+            details={"task_id": task_id, "unassignment": mutation},
+            exit_code=3,
+        )
+    refreshed = _require_fresh_delivery(task_id, task)
+    if _login_in(refreshed.get("assignees"), target_login):
+        raise WudiTaskError(
+            "github_unassignment_unconfirmed",
+            f"GitHub still reports {target_login} as an assignee.",
+            details={"task_id": task_id, "delivery": refreshed},
+            exit_code=3,
+        )
+    latest = _task_snapshot(coordinator, task_id)
+    raced_active = _active_for(latest, target_login)
+    if raced_active is not None:
+        restoration = update_source_assignee(task["source"], target_login, add=True)
+        raise WudiTaskError(
+            "github_unassignment_raced_active_agent",
+            "An agent started during unassignment; GitHub responsibility was restored when possible.",
+            details={
+                "task_id": task_id,
+                "active_agent": raced_active,
+                "assignment_restoration": restoration,
+            },
+            exit_code=3,
+        )
+    return {
+        "task_id": task_id,
+        "target_login": target_login,
+        "unassigned_by": actor.login,
+        "confirmed": True,
+        "changed": True,
+        "already_unassigned": False,
+        "still_owner": _login_in(refreshed.get("owners"), target_login),
+        "delivery": refreshed,
+        "github_unassignment": mutation,
+        "message": f"Unassigned {target_login} from {task_id}.",
+    }
+
+
+def _select_execute_task(
+    coordinator: GitCoordinator,
+    actor: Identity,
+    *,
+    repo: str,
+    task_id: str | None,
+) -> dict[str, Any]:
+    with coordinator.snapshot() as repository:
+        index = repository.load_index()
+        if task_id is not None:
+            if task_id in index.archived:
+                raise WudiTaskError(
+                    "task_already_archived",
+                    f"Task {task_id} has already been archived.",
+                    exit_code=3,
+                )
+            record = index.open.get(task_id)
+            if record is None:
+                raise WudiTaskError("task_not_found", f"Task {task_id} does not exist.")
+            candidates = [record]
+        else:
+            candidates = sorted(
+                index.open.values(),
+                key=lambda item: (
+                    item.task["priority"],
+                    item.task["created_at"],
+                    item.task["id"],
+                ),
+            )
+        candidates = [
+            record
+            for record in candidates
+            if record.task["repo"].casefold() == repo.casefold()
+        ]
+        if task_id is not None and not candidates:
+            raise WudiTaskError(
+                "repository_mismatch",
+                f"Task {task_id} does not belong to {repo}.",
+                details={"task_id": task_id, "repo": repo},
+            )
+
+        assigned: list[dict[str, Any]] = []
+        unowned: list[dict[str, Any]] = []
+        blocked: list[dict[str, Any]] = []
+        for record in candidates:
+            task = record.task
+            active = _active_for(task, actor.login)
+            if active is not None:
+                detail = {
+                    "task_id": task["id"],
+                    "reason": "current login already has an active agent",
+                    "active_agent": active,
+                }
+                if task_id is not None:
+                    raise WudiTaskError(
+                        "active_agent_conflict",
+                        f"{actor.login} already has an active run on {task_id}.",
+                        details=detail,
+                        exit_code=3,
+                    )
+                blocked.append(detail)
+                continue
+            dependencies = task_dependency_report(record, index)
+            if not dependencies["ready"]:
+                detail = {
+                    "task_id": task["id"],
+                    "reason": "dependencies are blocked",
+                    "blockers": dependencies["blockers"],
+                }
+                if task_id is not None:
+                    raise WudiTaskError(
+                        "dependency_blocked",
+                        f"Task {task_id} has blocked dependencies.",
+                        details=detail,
+                        exit_code=3,
+                    )
+                blocked.append(detail)
+                continue
+            delivery = fetch_delivery(task["source"])
+            if delivery.get("status") != "fresh" or delivery.get(
+                "delivery_state"
+            ) in TERMINAL_DELIVERY_STATES:
+                detail = {
+                    "task_id": task["id"],
+                    "reason": "delivery is unavailable or terminal",
+                    "delivery": delivery,
+                }
+                if task_id is not None:
+                    raise WudiTaskError(
+                        "delivery_not_executable",
+                        f"Task {task_id} does not have executable GitHub delivery.",
+                        details=detail,
+                        exit_code=3,
+                    )
+                blocked.append(detail)
+                continue
+            owners = delivery.get("owners") if isinstance(delivery.get("owners"), list) else []
+            candidate = {
+                "task": deepcopy(task),
+                "delivery": delivery,
+                "dependency_check": dependencies,
+            }
+            if _login_in(owners, actor.login):
+                assigned.append(candidate)
+            elif not owners:
+                unowned.append(candidate)
+            else:
+                detail = {
+                    "task_id": task["id"],
+                    "reason": "owned only by other users",
+                    "owners": owners,
+                }
+                if task_id is not None:
+                    unowned.append(candidate)
+                else:
+                    blocked.append(detail)
+        if assigned:
+            return {**assigned[0], "needs_assignment": False}
+        if unowned:
+            return {**unowned[0], "needs_assignment": True}
+        raise WudiTaskError(
+            "no_ready_task",
+            f"No ready task is available for {actor.login} in {repo}.",
+            details={"repo": repo, "blocked": blocked},
+            exit_code=3,
+        )
+
+
+def _finalize_agent_delivery(
+    coordinator: GitCoordinator,
+    actor: Identity,
+    started: dict[str, Any],
+) -> dict[str, Any]:
+    delivery = fetch_delivery(started["task"]["source"])
+    authorized = (
+        delivery.get("status") == "fresh"
+        and delivery.get("delivery_state") not in TERMINAL_DELIVERY_STATES
+        and _login_in(delivery.get("owners"), actor.login)
+    )
+    if authorized:
+        started["delivery"] = delivery
+        started["repo"] = started["task"]["repo"]
+        started["work_authorized"] = True
+        return started
+
+    try:
+        compensation = coordinator.write(
+            lambda repository: release_agent(
+                repository,
+                actor,
+                started["task_id"],
+                run_id=started["run_id"],
+                reason="Post-push GitHub ownership or delivery check failed.",
+            ),
+            actor,
+            lambda result: f"wuditask: release {result['task_id']} after delivery drift",
+        )
+    except WudiTaskError as error:
+        raise WudiTaskError(
+            "execution_reconciliation_required",
+            "GitHub no longer authorizes work and the exact agent run could not be released.",
+            details={
+                "task_id": started["task_id"],
+                "run_id": started["run_id"],
+                "delivery": delivery,
+                "release_error": error.as_dict()["error"],
+            },
+            exit_code=3,
+        ) from error
+    raise WudiTaskError(
+        "execution_reconciliation_failed",
+        "GitHub no longer authorizes work; the just-started agent run was released.",
+        details={
+            "task_id": started["task_id"],
+            "run_id": started["run_id"],
+            "delivery": delivery,
+            "compensation": compensation,
+        },
         exit_code=3,
     )
 
 
-def _finalize_claim_delivery(
+def _execute(
     coordinator: GitCoordinator,
-    actor: Any,
-    claimed: dict[str, Any],
+    actor: Identity,
+    *,
+    task_id: str | None,
+    repo: str | None,
 ) -> dict[str, Any]:
-    source = claimed["task"]["source"]
-    initial = claimed.get("delivery_eligibility") or {}
-    if source.get("kind") == "text":
-        claimed["work_authorized"] = True
-        return claimed
-
-    assignment: dict[str, Any] | None = None
-    if initial.get("decision") == "available" and _issue_source(source):
-        if not coordinator.distributed:
-            compensation = _claim_compensation(
-                coordinator,
-                actor,
-                claimed,
-                reason="Local mode cannot assign a real GitHub Issue.",
-                remove_assignment=False,
-            )
-            raise _claim_reconciliation_error(
-                claimed,
-                message="Local mode cannot establish GitHub ownership for an unassigned Issue.",
-                delivery=claimed["delivery"],
-                eligibility=initial,
-                compensation=compensation,
-            )
-        assignment = update_issue_assignee(source, actor.login, add=True)
-
-    delivery = fetch_delivery(source)
-    eligibility = actor_eligibility(delivery, actor)
-
-    if assignment is not None and assignment["status"] != "updated":
-        if eligibility["eligible"] and eligibility["decision"] == "adopt":
-            assignment = {
-                **assignment,
-                "status": "reconciled",
-                "changed": True,
-            }
-        else:
-            actor_assigned = _login_in(delivery.get("assignees"), actor.login)
-            remove_assignment = actor_assigned or delivery["status"] != "fresh"
-            compensation = _claim_compensation(
-                coordinator,
-                actor,
-                claimed,
-                reason="GitHub Issue assignment failed after acquiring the lease.",
-                remove_assignment=remove_assignment,
-            )
-            raise _claim_reconciliation_error(
-                claimed,
-                message="GitHub Issue assignment could not be confirmed.",
-                delivery=delivery,
-                eligibility=eligibility,
-                compensation=compensation,
-            )
-
-    decision = eligibility["decision"]
-    acceptable_terminal = decision in {"verification_required", "cancelled"}
-    if not ((eligibility["eligible"] and decision == "adopt") or acceptable_terminal):
-        if not claimed.get("lease_acquired") and assignment is None:
-            raise _claim_reconciliation_error(
-                claimed,
-                message="GitHub ownership no longer matches the existing execution lease.",
-                delivery=delivery,
-                eligibility=eligibility,
-            )
-        remove_assignment = assignment is not None and assignment.get("changed", False)
-        compensation = _claim_compensation(
+    if not coordinator.distributed:
+        raise WudiTaskError(
+            "execute_remote_hub_required",
+            "Agent execution requires the configured remote Hub and an ordinary no-force push.",
+        )
+    target_repo = repo or detect_current_repo()
+    if target_repo is None:
+        raise WudiTaskError(
+            "execution_repository_required",
+            "Run execute from the work repository or provide --repo owner/name.",
+        )
+    target_repo = normalize_repo(target_repo)
+    selected = _select_execute_task(
+        coordinator,
+        actor,
+        repo=target_repo,
+        task_id=task_id,
+    )
+    assignment = None
+    if selected["needs_assignment"]:
+        assignment = _assign_task(
             coordinator,
             actor,
-            claimed,
-            reason="GitHub ownership changed while the lease was being established.",
-            remove_assignment=remove_assignment,
+            selected["task"]["id"],
+            actor.login,
         )
-        raise _claim_reconciliation_error(
-            claimed,
-            message="GitHub ownership changed while the execution lease was being established.",
-            delivery=delivery,
-            eligibility=eligibility,
-            compensation=compensation,
-        )
-
-    claimed["delivery"] = delivery
-    claimed["delivery_eligibility"] = eligibility
-    claimed["work_authorized"] = decision == "adopt"
-    if assignment is not None:
-        claimed["github_assignment"] = assignment
-    return claimed
-
-
-def _release_with_delivery(
-    coordinator: GitCoordinator,
-    actor: Any,
-    task_id: str,
-    reason: str | None,
-) -> dict[str, Any]:
-    if not isinstance(reason, str) or not reason.strip():
-        raise WudiTaskError(
-            "release_reason_required",
-            "Releasing a task requires a reason.",
-            details={"question": "Why is this task being returned to the queue?"},
-        )
-    with coordinator.snapshot() as repository:
-        record = repository.load_index().open.get(task_id)
-        if record is None:
-            raise WudiTaskError(
-                "task_not_open",
-                f"Task {task_id} is not open.",
-                details={"task_id": task_id},
-            )
-        claim = record.task.get("claim")
-        if claim is not None and not claim_matches_identity(claim, actor):
-            raise WudiTaskError(
-                "claim_holder_mismatch",
-                f"Task {task_id} is claimed by another GitHub user.",
-                details={"task_id": task_id, "claim_holder": claim_identity(claim)},
-                exit_code=3,
-            )
-        claim_token = claim.get("token") if isinstance(claim, dict) else None
-        expected_unclaimed = claim is None
-        source = dict(record.task["source"])
-
-    def write_release() -> dict[str, Any]:
-        return coordinator.write(
-            lambda repository: release_task(
-                repository,
-                actor,
-                task_id,
-                reason=reason,
-                expected_claim_token=claim_token,
-                expected_unclaimed=expected_unclaimed,
-            ),
+    run_id = new_run_id()
+    started = coordinator.write(
+        lambda repository: start_agent(
+            repository,
             actor,
-            lambda result: (
-                f"wuditask: release {result['task_id']} - "
-                f"{result.get('reason', '').replace(chr(10), ' ')[:72]}"
+            task_id=selected["task"]["id"],
+            repo=target_repo,
+            run_id=run_id,
+        ),
+        actor,
+        lambda result: f"wuditask: execute {result['task_id']} ({actor.login})",
+    )
+    if assignment is not None:
+        started["github_assignment"] = assignment
+    return _finalize_agent_delivery(coordinator, actor, started)
+
+
+def _check_task(record: TaskRecord, index: TaskIndex) -> dict[str, Any]:
+    task = record.task
+    coordination = task_dependency_report(record, index)
+    delivery = fetch_delivery(task["source"])
+    owners = (
+        delivery.get("owners")
+        if delivery.get("status") == "fresh"
+        and isinstance(delivery.get("owners"), list)
+        else None
+    )
+    observations: list[dict[str, str]] = []
+    if delivery.get("status") != "fresh":
+        observations.append(
+            {
+                "code": "github_delivery_unavailable",
+                "message": delivery.get("error") or "GitHub delivery is unavailable.",
+            }
+        )
+    for agent in task.get("active_agents", []):
+        if owners is not None and not _login_in(owners, agent["login"]):
+            observations.append(
+                {
+                    "code": "active_agent_not_owner",
+                    "message": f"Active agent {agent['login']} is no longer a live owner.",
+                }
+            )
+    state = delivery.get("delivery_state")
+    if not record.archived and state in TERMINAL_DELIVERY_STATES:
+        observations.append(
+            {
+                "code": "archive_required",
+                "message": "GitHub delivery is terminal but the task remains open.",
+            }
+        )
+    if record.archived and delivery.get("status") == "fresh":
+        outcome = task["completion"]["outcome"]
+        expected = {
+            "done": {"verification_needed"},
+            "failed": TERMINAL_DELIVERY_STATES,
+            "cancelled": {"cancelled"},
+        }[outcome]
+        if state not in expected:
+            observations.append(
+                {
+                    "code": "archived_outcome_delivery_mismatch",
+                    "message": f"Archived {outcome} does not match delivery state {state}.",
+                }
+            )
+    return {
+        "id": task["id"],
+        "location": "archive" if record.archived else "open",
+        "task": task,
+        "dependency_check": coordination,
+        "delivery": delivery,
+        "owners": owners,
+        "active_agents": task.get("active_agents", []),
+        "observations": observations,
+        "consistent": not observations,
+    }
+
+
+def _check(
+    repository: TaskRepository,
+    task_id: str | None,
+    repo_filter: str | None,
+) -> dict[str, Any]:
+    index = repository.load_index()
+    normalized = normalize_repo(repo_filter) if repo_filter else None
+    if task_id is not None:
+        record = index.get(task_id)
+        if record is None:
+            raise WudiTaskError("task_not_found", f"Task {task_id} does not exist.")
+        reports = [_check_task(record, index)]
+    else:
+        records = sorted(
+            index.all.values(),
+            key=lambda item: (
+                item.archived,
+                item.task["priority"],
+                item.task["created_at"],
+                item.task["id"],
             ),
         )
-
-    if (
-        expected_unclaimed
-        or not coordinator.distributed
-        or source.get("kind") == "text"
-    ):
-        return write_release()
-
-    delivery = fetch_delivery(source)
-    if delivery["status"] != "fresh":
-        raise WudiTaskError(
-            "github_delivery_unavailable",
-            f"Task {task_id} cannot be released while GitHub delivery is unavailable.",
-            details={"task_id": task_id, "delivery": delivery},
-            exit_code=3,
-        )
-    if _actor_owns_active_pr(delivery, actor.login):
-        raise WudiTaskError(
-            "active_pull_request_prevents_release",
-            "The current user still owns an active closing pull request; close or transfer it before returning the task to the queue.",
-            details={"task_id": task_id, "delivery": delivery},
-            exit_code=3,
-        )
-
-    removal: dict[str, Any] | None = None
-    if _issue_source(source) and _login_in(delivery.get("assignees"), actor.login):
-        removal = update_issue_assignee(source, actor.login, add=False)
-        if removal["status"] != "updated":
-            raise WudiTaskError(
-                "github_unassignment_failed",
-                "The execution lease was retained because GitHub responsibility could not be released.",
-                details={"task_id": task_id, "unassignment": removal},
-                exit_code=3,
-            )
-        refreshed = fetch_delivery(source)
-        if (
-            refreshed["status"] != "fresh"
-            or _login_in(refreshed.get("assignees"), actor.login)
-            or _actor_owns_active_pr(refreshed, actor.login)
-        ):
-            restoration = update_issue_assignee(source, actor.login, add=True)
-            raise WudiTaskError(
-                "github_release_reconciliation_required",
-                "GitHub responsibility could not be confirmed released; the WudiTask lease was retained.",
-                details={
-                    "task_id": task_id,
-                    "delivery": refreshed,
-                    "assignment_restoration": restoration,
-                },
-                exit_code=3,
-            )
-        delivery = refreshed
-
-    try:
-        result = write_release()
-    except WudiTaskError as error:
-        if removal is None:
-            raise
-        raise WudiTaskError(
-            "github_release_reconciliation_required",
-            "GitHub responsibility was removed, but the WudiTask lease release could not be confirmed; retry release or reconcile before any work starts.",
-            details={
-                "task_id": task_id,
-                "release_error": error.as_dict()["error"],
-                "github_unassignment": removal,
-            },
-            exit_code=3,
-        ) from error
-
-    result["delivery"] = delivery
-    if removal is not None:
-        result["github_unassignment"] = removal
-    return result
-
-
-def _help(topic: str | None) -> dict[str, Any]:
-    workflow = [
-        "add: record a task with a repository, goal, and acceptance criteria",
-        "execute: claim one ready and unowned task; start work only after confirmed push",
-        "dep-check: inspect cross-repository blockers and completion evidence",
-        "archive: preserve every ordinary done, failed, or cancelled result",
-        "delete: remove only explicitly identified erroneous archived records",
-    ]
-    selected = (
-        {topic: HELP_COMMANDS[topic]}
-        if topic and topic != "workflow"
-        else HELP_COMMANDS
-    )
+        reports = [
+            _check_task(record, index)
+            for record in records
+            if normalized is None or record.task["repo"] == normalized
+        ]
+    summary = {
+        "checked": len(reports),
+        "ready": sum(
+            report["location"] == "open"
+            and report["dependency_check"]["state"] == "ready"
+            for report in reports
+        ),
+        "blocked": sum(
+            report["location"] == "open"
+            and report["dependency_check"]["state"] == "blocked"
+            for report in reports
+        ),
+        "in_progress": sum(
+            report["location"] == "open"
+            and report["dependency_check"]["state"] == "in_progress"
+            for report in reports
+        ),
+        "archived": sum(report["location"] == "archive" for report in reports),
+        "drift": sum(not report["consistent"] for report in reports),
+    }
     return {
-        "message": "WudiTask help",
-        "topic": topic or "workflow",
-        "cli_invocation": "wuditask help [topic]",
-        "workflow": workflow,
-        "commands": [{"name": name, **details} for name, details in selected.items()],
-        "notes": [
-            "Use the operation-specific agent skill shown for each command.",
-            "Task commands use hub_remote and hub_branch from config; the tool origin is never used as the Hub.",
-            "For add, use a matching Issue or PR in the execution repository; use a configured Hub Issue only when that repository cannot host the narrative.",
-            "GitHub owns delivery progress; WudiTask owns the execution lease, dependencies, and verified archive outcome.",
-            "Selfupdate fix directly maintains WudiTask in an isolated worktree; it does not create an Issue or queue task.",
-            "Run commands from the target work repository so owner/name can be detected from origin.",
-            "Remote writes use the human identity from gh api user.",
-            "Never start work until execute returns confirmed=true, sync.confirmed=true, and work_authorized=true.",
-            "Use --json before the command for stable agent-readable output.",
-        ],
+        "tasks": reports,
+        "count": len(reports),
+        "inconsistent": summary["drift"],
+        "summary": summary,
+        "checked_at": utc_now(),
     }
 
 
@@ -814,36 +795,47 @@ def _list_tasks(
 ) -> dict[str, Any]:
     index = repository.load_index()
     normalized = normalize_repo(repo_filter) if repo_filter else None
-    open_reports = dependency_report(index)["tasks"]
-    for report in open_reports:
-        record = index.open[report["id"]]
-        report["delivery"] = fetch_delivery(record.task["source"])
-    open_tasks = [
-        report
-        for report in open_reports
-        if normalized is None or report["repo"] == normalized
-    ]
-    archived_tasks = [
-        {
-            **record.task,
-            "delivery": fetch_delivery(record.task["source"]),
-        }
-        for record in index.archived.values()
-        if normalized is None or record.task["repo"] == normalized
-    ]
-    archived_tasks.sort(
-        key=lambda task: (task["completion"]["completed_at"], task["id"]),
+    open_tasks = []
+    for record in sorted(
+        index.open.values(),
+        key=lambda item: (
+            item.task["priority"],
+            item.task["created_at"],
+            item.task["id"],
+        ),
+    ):
+        if normalized is None or record.task["repo"] == normalized:
+            open_tasks.append(
+                {
+                    **record.task,
+                    "derived": task_dependency_report(record, index),
+                    "delivery": fetch_delivery(record.task["source"]),
+                }
+            )
+    archived_tasks = []
+    for record in sorted(
+        index.archived.values(),
+        key=lambda item: (
+            item.task["completion"]["completed_at"],
+            item.task["id"],
+        ),
         reverse=True,
-    )
+    ):
+        if normalized is None or record.task["repo"] == normalized:
+            archived_tasks.append(
+                {
+                    **record.task,
+                    "derived": task_dependency_report(record, index),
+                    "delivery": fetch_delivery(record.task["source"]),
+                }
+            )
     result: dict[str, Any] = {"scope": scope}
     if scope in {"open", "all"}:
         result["open_tasks"] = open_tasks
     if scope in {"archive", "all"}:
         result["archived_tasks"] = archived_tasks
     result["count"] = sum(
-        len(value)
-        for key, value in result.items()
-        if key in {"open_tasks", "archived_tasks"}
+        len(result.get(key, [])) for key in ("open_tasks", "archived_tasks")
     )
     return result
 
@@ -852,230 +844,124 @@ def _show_task(repository: TaskRepository, task_id: str) -> dict[str, Any]:
     index = repository.load_index()
     record = index.get(task_id)
     if record is None:
-        raise WudiTaskError(
-            "task_not_found",
-            f"Task {task_id} does not exist.",
-            details={"task_id": task_id},
-        )
-    result: dict[str, Any] = {
-        "location": "archive" if record.archived else "open",
-        "task": record.task,
-    }
-    result["dependency_status"] = dependency_report(index, task_id)["task"]
-    result["delivery"] = fetch_delivery(record.task["source"])
-    return result
+        raise WudiTaskError("task_not_found", f"Task {task_id} does not exist.")
+    return _check_task(record, index)
 
 
-def _reconcile_task(record: Any, index: Any) -> dict[str, Any]:
-    task = record.task
-    coordination = dependency_report(index, task["id"])["task"]
-    delivery = fetch_delivery(task["source"])
-    observations: list[dict[str, str]] = []
-    delivery_state = delivery["delivery_state"]
-    claim_holder = coordination.get("claim_holder")
-    delivery_owners = list(delivery.get("assignees") or [])
-    for pr in delivery.get("prs") or []:
-        if pr.get("state") == "OPEN" and pr.get("author"):
-            delivery_owners.append(pr["author"])
-        if pr.get("state") == "OPEN":
-            delivery_owners.extend(pr.get("assignees") or [])
-    owner_keys = {value.casefold() for value in delivery_owners}
-
-    if delivery["status"] != "fresh":
-        observations.append(
-            {
-                "code": "delivery_unavailable",
-                "message": delivery.get("error") or "GitHub delivery is unavailable.",
-            }
-        )
-    elif record.archived and task["source"].get("kind") != "text":
-        outcome = task["completion"]["outcome"]
-        expected = {
-            "done": {"verification_needed"},
-            "cancelled": {"cancelled"},
-            "failed": {"cancelled", "verification_needed"},
-        }[outcome]
-        if delivery_state not in expected:
-            observations.append(
-                {
-                    "code": "archived_outcome_delivery_mismatch",
-                    "message": (
-                        f"Archived outcome {outcome} expects GitHub delivery "
-                        f"in {sorted(expected)}, but it is {delivery_state}."
-                    ),
-                }
-            )
-    elif delivery_state in {"assigned", "implementing", "review", "ready_to_merge"}:
-        if claim_holder is None:
-            observations.append(
-                {
-                    "code": "external_delivery_without_lease",
-                    "message": "GitHub shows active work while WudiTask has no execution lease.",
-                }
-            )
-        elif claim_holder["login"].casefold() not in owner_keys:
-            observations.append(
-                {
-                    "code": "claim_delivery_mismatch",
-                    "message": "The WudiTask claim holder is not a GitHub assignee or active closing-PR author.",
-                }
-            )
-        elif owner_keys - {claim_holder["login"].casefold()}:
-            observations.append(
-                {
-                    "code": "claim_delivery_multiple_owners",
-                    "message": "GitHub has active owners in addition to the WudiTask claim holder.",
-                }
-            )
-    elif delivery_state == "unstarted" and claim_holder is not None:
-        observations.append(
-            {
-                "code": "github_assignment_missing",
-                "message": "WudiTask is claimed but the canonical GitHub Issue is unassigned.",
-            }
-        )
-    elif delivery_state == "verification_needed" and not record.archived:
-        observations.append(
-            {
-                "code": "verification_needed",
-                "message": "GitHub delivery completed; WudiTask acceptance evidence still needs archival.",
-            }
-        )
-    elif delivery_state == "cancelled" and not record.archived:
-        observations.append(
-            {
-                "code": "cancellation_needed",
-                "message": "GitHub delivery was cancelled; the open WudiTask needs an explicit outcome.",
-            }
-        )
-
+def _help(topic: str | None) -> dict[str, Any]:
+    names = [topic] if topic and topic != "workflow" else list(HELP_COMMANDS)
     return {
-        "task_id": task["id"],
-        "repo": task["repo"],
-        "coordination": coordination,
-        "delivery": delivery,
-        "observations": observations,
-        "consistent": not observations,
-    }
-
-
-def _reconcile(repository: TaskRepository, task_id: str | None) -> dict[str, Any]:
-    index = repository.load_index()
-    if task_id:
-        record = index.get(task_id)
-        if record is None:
-            raise WudiTaskError(
-                "task_not_found",
-                f"Task {task_id} does not exist.",
-                details={"task_id": task_id},
-            )
-        reports = [_reconcile_task(record, index)]
-    else:
-        reports = [
-            _reconcile_task(record, index)
-            for record in sorted(
-                index.open.values(),
-                key=lambda item: (
-                    item.task["priority"],
-                    item.task["created_at"],
-                    item.task["id"],
-                ),
-            )
-        ]
-    return {
-        "tasks": reports,
-        "count": len(reports),
-        "inconsistent": sum(not report["consistent"] for report in reports),
+        "message": "WudiTask help",
+        "topic": topic or "workflow",
+        "cli_invocation": "wuditask help [topic]",
+        "workflow": [
+            "GitHub Issue or PR is the task contract and live owner source.",
+            "assign changes GitHub responsibility; execute separately starts a Hub agent run.",
+            "execute prefers ready work assigned to you, then self-assigns ready unowned work.",
+            "check refreshes dependencies, owners, active agents, PRs, reviews, and checks.",
+            "release stops only the matching run; archive records a verified terminal outcome.",
+        ],
+        "commands": [
+            {
+                "name": name,
+                "purpose": HELP_COMMANDS[name][0],
+                "agent_usage": {"codex": HELP_COMMANDS[name][1]},
+            }
+            for name in names
+        ],
+        "notes": [
+            "The tool repository and task Hub are separate remotes.",
+            "Hub writes use ordinary no-force pushes.",
+            "Start work only after execute returns work_authorized=true and sync.confirmed=true.",
+            "There are no dep-check or reconcile compatibility commands; use check.",
+        ],
     }
 
 
 def _text(result: dict[str, Any]) -> str:
     if isinstance(result.get("commands"), list):
         lines = ["WudiTask workflow"]
-        for step in result.get("workflow", []):
-            lines.append(f"  {step}")
-        lines.extend(["", "Commands"])
+        lines.extend(f"  {step}" for step in result.get("workflow", []))
+        lines.append("")
+        lines.append("Commands")
         for command in result["commands"]:
             lines.append(f"  {command['name']}: {command['purpose']}")
-            lines.append(f"    {command['usage']}")
-            for mode, invocation in command.get("agent_usage", {}).items():
-                lines.append(f"    {mode}: {invocation}")
-        lines.extend(
-            [
-                "",
-                "CLI help",
-                f"  {result['cli_invocation']}",
-            ]
-        )
-        if result.get("notes"):
-            lines.extend(["", "Notes"])
-            for note in result["notes"]:
-                lines.append(f"  {note}")
+            for product, invocation in command.get("agent_usage", {}).items():
+                lines.append(f"    {product}: {invocation}")
         return "\n".join(lines)
     if isinstance(result.get("message"), str):
         return result["message"]
-    if isinstance(result.get("tasks"), list) and "inconsistent" in result:
-        if not result["tasks"]:
-            return "No tasks to reconcile."
-        lines = [
-            "TASK ID                         QUEUE        DELIVERY             RESULT"
-        ]
-        for report in result["tasks"]:
-            observations = report.get("observations") or []
-            outcome = (
-                ", ".join(item.get("code", "unknown") for item in observations)
-                if observations
-                else "consistent"
-            )
-            lines.append(
-                f"{str(report.get('task_id', '')):<31} "
-                f"{str(report.get('coordination', {}).get('state', 'unknown')):<12} "
-                f"{str(report.get('delivery', {}).get('delivery_state', 'unavailable')):<20} "
-                f"{outcome}"
-            )
-            for observation in observations:
-                lines.append(f"  - {observation.get('message', '')}")
-        return "\n".join(lines)
-    tasks = result.get("tasks") or result.get("open_tasks")
-    if isinstance(tasks, list):
-        if not tasks:
+    reports = result.get("tasks")
+    if isinstance(reports, list):
+        if not reports:
             return "No tasks."
-        lines = [
-            "QUEUE        DELIVERY             PRI  TASK ID                         REPOSITORY          TITLE"
-        ]
-        for task in tasks:
-            lines.append(
-                f"{str(task.get('state', 'archived')):<12} "
-                f"{str(task.get('delivery', {}).get('delivery_state', 'unavailable')):<20} "
-                f"{str(task.get('priority', '-')):<4} "
-                f"{str(task.get('id', '')):<31} "
-                f"{str(task.get('repo', '')):<19} "
-                f"{task.get('title', '')}"
-            )
+        lines = ["TASK ID                         HUB          GITHUB               OWNERS / ACTIVE"]
+        for report in reports:
+            if "dependency_check" in report:
+                owners = ",".join(report.get("owners") or []) or "unknown"
+                active = ",".join(
+                    agent["login"] for agent in report.get("active_agents", [])
+                ) or "-"
+                lines.append(
+                    f"{report['id']:<31} "
+                    f"{report['dependency_check']['state']:<12} "
+                    f"{report['delivery'].get('delivery_state', 'unavailable'):<20} "
+                    f"{owners} / {active}"
+                )
         return "\n".join(lines)
     if isinstance(result.get("task"), dict):
-        task = result["task"]
-        return json.dumps(task, indent=2, ensure_ascii=False)
+        return json.dumps(result, indent=2, ensure_ascii=False)
     return json.dumps(result, indent=2, ensure_ascii=False)
 
 
 def _emit(result: dict[str, Any], as_json: bool) -> None:
     payload = {"ok": True, **result}
-    if as_json:
-        print(json.dumps(payload, ensure_ascii=False, sort_keys=True))
-    else:
-        print(_text(result))
+    print(
+        json.dumps(payload, ensure_ascii=False, sort_keys=True)
+        if as_json
+        else _text(result)
+    )
 
 
 def _emit_error(error: WudiTaskError, as_json: bool) -> None:
     if as_json:
         print(json.dumps(error.as_dict(), ensure_ascii=False, sort_keys=True))
-    else:
-        print(f"wuditask: {error.message}", file=sys.stderr)
-        if error.details is not None:
-            print(
-                json.dumps(error.details, indent=2, ensure_ascii=False), file=sys.stderr
+        return
+    print(f"wuditask: {error.message}", file=sys.stderr)
+    if error.details is not None:
+        print(json.dumps(error.details, indent=2, ensure_ascii=False), file=sys.stderr)
+
+
+def _coordinator(
+    args: argparse.Namespace,
+    tool_root: Path,
+) -> tuple[GitCoordinator, str | None]:
+    if args.local:
+        if args.hub is None:
+            raise WudiTaskError(
+                "local_hub_required", "Local mode requires an explicit --hub path."
             )
+        coordinator = GitCoordinator(local_root=args.hub.expanduser().resolve())
+        return coordinator, detect_current_repo(coordinator.root)
+    if args.hub is not None:
+        raise WudiTaskError(
+            "remote_hub_path_invalid",
+            "Remote mode uses the installed hub_remote and does not accept --hub.",
+        )
+    config = load_config(expected_tool_path=tool_root)
+    return (
+        GitCoordinator(remote=config.hub_remote, branch=config.hub_branch),
+        repo_from_remote(config.hub_remote),
+    )
+
+
+def _write_actor(args: argparse.Namespace, coordinator: GitCoordinator) -> Identity:
+    if args.actor and coordinator.distributed:
+        raise WudiTaskError(
+            "actor_override_local_only",
+            "Remote mutations must use the authenticated gh login.",
+        )
+    return resolve_identity(args.actor)
 
 
 def run(args: argparse.Namespace, tool_root: Path) -> dict[str, Any]:
@@ -1083,22 +969,17 @@ def run(args: argparse.Namespace, tool_root: Path) -> dict[str, Any]:
     if args.command == "help":
         return _help(args.topic)
     if args.command == "selfupdate":
-        if args.local:
+        if args.local or args.hub is not None:
             raise WudiTaskError(
-                "selfupdate_local_mode_invalid",
-                "Self-update synchronizes with origin and cannot use --local.",
-            )
-        if args.hub is not None:
-            raise WudiTaskError(
-                "selfupdate_hub_path_invalid",
-                "Self-update acts only on the tool clone and does not accept --hub.",
+                "selfupdate_hub_invalid",
+                "Self-update acts only on the registered tool clone.",
             )
         return self_update(tool_root, check_only=args.check)
     if args.command == "install":
         if args.local or args.hub is not None:
             raise WudiTaskError(
-                "install_local_mode_invalid",
-                "Install registers the tool clone and a remote Hub; it does not accept --local or --hub.",
+                "install_hub_invalid",
+                "Install registers a remote Hub and does not accept local Hub flags.",
             )
         return install_agent_access(
             tool_root,
@@ -1107,54 +988,29 @@ def run(args: argparse.Namespace, tool_root: Path) -> dict[str, Any]:
             home=args.home,
             replace=args.replace,
         )
-    hub_repo: str | None
-    if args.local:
-        if args.hub is None:
-            raise WudiTaskError(
-                "local_hub_required",
-                "Local mode requires an explicit --hub path.",
-            )
-        coordinator = GitCoordinator(local_root=args.hub.expanduser().resolve())
-        hub_repo = detect_current_repo(coordinator.root)
-    else:
-        if args.hub is not None:
-            raise WudiTaskError(
-                "remote_hub_path_invalid",
-                "Remote mode uses hub_remote from config and does not accept --hub.",
-            )
-        config = load_config(expected_tool_path=tool_root)
-        coordinator = GitCoordinator(
-            remote=config.hub_remote,
-            branch=config.hub_branch,
-        )
-        hub_repo = repo_from_remote(config.hub_remote)
 
-    if args.command == "delete" and not coordinator.distributed:
+    coordinator, hub_repo = _coordinator(args, tool_root)
+    if args.command in {"execute", "release", "archive", "delete"} and not coordinator.distributed:
+        code = f"{args.command}_remote_hub_required"
         raise WudiTaskError(
-            "delete_remote_hub_required",
-            "Delete requires the configured remote Hub and does not support --local.",
-            details={
-                "action": (
-                    "Install a remote Hub, then retry without --local so one Git commit "
-                    "is the atomic boundary."
-                )
-            },
+            code,
+            f"{args.command} requires the configured remote Hub as its atomic Git boundary.",
         )
 
-    if args.command in {"add", "execute", "archive", "delete", "release"}:
-        if args.actor and coordinator.distributed:
-            raise WudiTaskError(
-                "actor_override_local_only",
-                "Actor override is allowed only with --local; remote writes must use gh identity.",
-            )
-        actor = resolve_identity(args.actor)
+    if args.command in {
+        "add",
+        "assign",
+        "unassign",
+        "execute",
+        "release",
+        "archive",
+        "delete",
+    }:
+        actor = _write_actor(args, coordinator)
         if args.command == "add":
             spec = _add_spec(args)
-            created_at = (
-                timestamp_from_task_id(args.task_id) if args.task_id else utc_now()
-            )
-            if created_at is None:
-                created_at = utc_now()
+            created_at = timestamp_from_task_id(args.task_id) if args.task_id else utc_now()
+            created_at = created_at or utc_now()
             task_id = args.task_id or new_task_id(created_at)
             if not TASK_ID_RE.fullmatch(task_id):
                 raise WudiTaskError(
@@ -1174,21 +1030,40 @@ def run(args: argparse.Namespace, tool_root: Path) -> dict[str, Any]:
                 actor,
                 lambda result: f"wuditask: add {result['task_id']}",
             )
+        if args.command == "assign":
+            return _assign_task(
+                coordinator,
+                actor,
+                args.task_id,
+                _target_login(args.target_login or actor.login),
+            )
+        if args.command == "unassign":
+            return _unassign_task(
+                coordinator,
+                actor,
+                args.task_id,
+                _target_login(args.target_login or actor.login),
+            )
         if args.command == "execute":
-            target_repo = args.repo or detect_current_repo()
-            claimed = coordinator.write(
-                lambda repository: claim_task(
+            return _execute(
+                coordinator,
+                actor,
+                task_id=args.task_id,
+                repo=args.repo,
+            )
+        if args.command == "release":
+            return coordinator.write(
+                lambda repository: release_agent(
                     repository,
                     actor,
-                    repo=target_repo,
-                    task_id=args.task_id,
+                    args.task_id,
+                    run_id=args.run_id,
+                    reason=args.reason,
                 ),
                 actor,
-                lambda result: f"wuditask: claim {result['task_id']}",
+                lambda result: f"wuditask: release {result['task_id']} ({actor.login})",
             )
-            return _finalize_claim_delivery(coordinator, actor, claimed)
         if args.command == "archive":
-            evidence = _evidence(args.evidence)
             return coordinator.write(
                 lambda repository: archive_task(
                     repository,
@@ -1196,65 +1071,43 @@ def run(args: argparse.Namespace, tool_root: Path) -> dict[str, Any]:
                     args.task_id,
                     outcome=args.outcome,
                     result=args.result,
-                    evidence=evidence,
+                    evidence=args.evidence or [],
+                    run_id=args.run_id,
                 ),
                 actor,
                 lambda result: f"wuditask: archive {result['task_id']} ({args.outcome})",
             )
-        if args.command == "delete":
-            return coordinator.write(
-                lambda repository: delete_archived_tasks(
-                    repository,
-                    actor,
-                    args.task_ids,
-                    reason=args.reason,
-                ),
+        return coordinator.write(
+            lambda repository: delete_archived_tasks(
+                repository,
                 actor,
-                lambda result: (
-                    f"wuditask: delete {len(result['deleted_task_ids'])} archived task(s)"
-                    f"\n\nTasks: {', '.join(result['deleted_task_ids'])}"
-                    f"\nReason: {result['reason']}"
-                ),
-            )
-        return _release_with_delivery(
-            coordinator,
+                args.task_ids,
+                reason=args.reason,
+            ),
             actor,
-            args.task_id,
-            args.reason,
+            lambda result: f"wuditask: delete {len(result['deleted_task_ids'])} archived task(s)",
         )
 
     with coordinator.snapshot() as repository:
-        if args.command == "dep-check":
-            index = repository.load_index()
-            result = dependency_report(index, args.task_id)
-            reports = [result["task"]] if args.task_id else result["tasks"]
-            for report in reports:
-                record = index.get(report["id"])
-                if record is not None:
-                    report["delivery"] = fetch_delivery(record.task["source"])
-            return result
+        if args.command == "check":
+            return _check(repository, args.task_id, args.repo)
         if args.command == "list":
             return _list_tasks(repository, args.scope, args.repo)
         if args.command == "show":
             return _show_task(repository, args.task_id)
-        if args.command == "reconcile":
-            return _reconcile(repository, args.task_id)
         if args.command == "validate":
             return validate_repository(repository)
         if args.command == "build-site":
-            output = args.output
-            if not output.is_absolute():
-                output = Path.cwd() / output
-            hub_repo = (
-                repo_from_remote(coordinator.remote)
-                if coordinator.remote
-                else detect_current_repo(repository.root)
-            )
+            output = args.output if args.output.is_absolute() else Path.cwd() / args.output
             return build_site(
                 repository.load_index(),
                 source=tool_root / "site",
                 output=output,
-                hub_repo=hub_repo,
+                hub_repo=(
+                    repo_from_remote(coordinator.remote)
+                    if coordinator.remote
+                    else detect_current_repo(repository.root)
+                ),
             )
     raise WudiTaskError("unknown_command", f"Unknown command: {args.command}")
 
@@ -1269,9 +1122,7 @@ def main(argv: Sequence[str] | None = None, *, default_tool: Path | None = None)
         _emit_error(error, args.json)
         return error.exit_code
     except KeyboardInterrupt:
-        error = WudiTaskError(
-            "interrupted", "Operation was interrupted.", exit_code=130
-        )
+        error = WudiTaskError("interrupted", "Operation was interrupted.", exit_code=130)
         _emit_error(error, args.json)
         return error.exit_code
     _emit(result, args.json)

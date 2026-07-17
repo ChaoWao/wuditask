@@ -17,15 +17,16 @@ ROOT = Path(__file__).resolve().parents[1]
 EXPECTED_SKILLS = {
     "wuditask-add",
     "wuditask-archive",
+    "wuditask-assign",
+    "wuditask-check",
     "wuditask-delete",
-    "wuditask-dep-check",
     "wuditask-execute",
     "wuditask-install",
     "wuditask-list",
-    "wuditask-reconcile",
     "wuditask-release",
     "wuditask-selfupdate",
     "wuditask-show",
+    "wuditask-unassign",
 }
 
 
@@ -110,8 +111,12 @@ class InstallTests(unittest.TestCase):
                         installed.resolve(),
                     )
                 self.assertIn(
-                    "fallback Issue in the configured Hub repository",
+                    "canonical GitHub source",
                     (base / "wuditask-add" / "SKILL.md").read_text(),
+                )
+                self.assertNotIn(
+                    "text source",
+                    (base / "wuditask-add" / "SKILL.md").read_text().lower(),
                 )
                 self.assertIn(
                     "Do not create a GitHub Issue for this maintenance request",
@@ -248,13 +253,15 @@ class InstallTests(unittest.TestCase):
             hub_remote = make_hub_origin(root)
             home = root / "home"
             install_agent_access(tool, hub_remote=str(hub_remote), home=home)
-            stale_source = tool / ".agents" / "skills" / "wuditask"
-            stale_source.mkdir()
+            retired = {"wuditask-dep-check", "wuditask-reconcile"}
+            for name in retired:
+                (tool / ".agents" / "skills" / name).mkdir()
             for base in (home / ".agents" / "skills", home / ".claude" / "skills"):
-                (base / "wuditask").symlink_to(
-                    stale_source,
-                    target_is_directory=True,
-                )
+                for name in retired:
+                    (base / name).symlink_to(
+                        tool / ".agents" / "skills" / name,
+                        target_is_directory=True,
+                    )
                 unrelated_target = root / f"unrelated-{base.parent.name}"
                 unrelated_target.mkdir()
                 (base / "personal-skill").symlink_to(
@@ -269,9 +276,10 @@ class InstallTests(unittest.TestCase):
                 home=home,
             )
             self.assertEqual(sorted(EXPECTED_SKILLS), reconciled["skills"])
-            self.assertEqual(2, len(reconciled["removed_links"]))
+            self.assertEqual(4, len(reconciled["removed_links"]))
             for base in (home / ".agents" / "skills", home / ".claude" / "skills"):
-                self.assertFalse((base / "wuditask").exists())
+                for name in retired:
+                    self.assertFalse((base / name).exists())
                 self.assertTrue((base / "personal-skill").is_symlink())
                 self.assertEqual("user-owned", (base / "notes.txt").read_text().strip())
 

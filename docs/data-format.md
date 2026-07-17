@@ -1,16 +1,43 @@
-# WudiTask 数据格式 v2
+# WudiTask 数据格式 v3
 
 任务与删除回执的机器契约分别位于 `schemas/task.schema.json` 和
-`schemas/deletion-receipt.schema.json`；Hub 必须声明当前任务/API 版本：
+`schemas/deletion-receipt.schema.json`。Hub 必须精确声明：
 
 ```json
 {
-  "schema_version": 2,
-  "tool_api_version": 3
+  "schema_version": 3,
+  "tool_api_version": 4
 }
 ```
 
-WudiTask 不支持混用 v1/v2。升级时必须一次性迁移 Hub manifest 与所有任务。
+v3 是无兼容切换：工具不读取 v1/v2 task，不接受旧 `claim`、text source 或
+重复 narrative 字段。升级必须在同一个 Hub commit 中迁移 manifest、全部 open
+和 archive task，并固定兼容的新工具 commit。
+
+## 两个事实源
+
+GitHub Issue/PR 是业务合同：
+
+- title、body、goal、context 与 acceptance；
+- assignees、PR author、reviews、checks 与交付终态；
+- discussion 和实现链接。
+
+Task Hub 是最小协调记录：
+
+- 执行仓、priority 与跨仓 dependencies；
+- 当前 `active_agents`；
+- 归档 outcome、证据和参与 runs。
+
+Hub 不复制 GitHub narrative，也不保存 owner。owner 每次从 canonical source
+实时派生：
+
+- PR source：PR author + PR assignees；
+- Issue source：Issue assignees + closing-linked PR authors；普通 timeline mention
+  不产生 owner。
+
+owner 与 active agent 正交。assignment 不代表已经执行。execute 自动选择
+unowned task，或显式选择当前 login 尚非 owner 的 task 时，会先执行并确认独立
+的 self-assignment，然后才启动 Hub run。
 
 ## 存储与状态
 
@@ -18,74 +45,85 @@ WudiTask 不支持混用 v1/v2。升级时必须一次性迁移 Hub manifest 与
 - archived task：`data/archive/<year>/<id>.json`
 - deletion receipt：`data/deletions/<receipt-id>.json`
 
-正常任务不会删除。用户明确确认误建的 archived record 可以通过受保护的
-`delete` 命令从当前快照移除，并在当前树中写入持久回执。任务
-状态仍由位置、依赖、`claim` 和 `completion` 推导，不保存可漂移的
-WudiTask `status`：
+状态由位置、dependencies、`active_agents` 与 `completion` 派生：
 
 | 条件 | coordination state |
 | --- | --- |
-| open、`claim=null`、依赖完成 | `ready` |
-| open、`claim=null`、依赖未完成 | `blocked` |
-| open、`claim` 非空 | `in_progress` |
+| open、依赖完成、`active_agents=[]` | `ready` |
+| open、依赖未完成、`active_agents=[]` | `blocked` |
+| open、`active_agents` 非空 | `in_progress` |
 | archive | `completion.outcome` |
 
-GitHub delivery 是另一条正交状态，通过 canonical `source` 实时派生：
-`unstarted`、`assigned`、`implementing`、`review`、`ready_to_merge`、
-`verification_needed`、`cancelled`、`text_only` 或 `unavailable`。它不写回任务
-JSON，也不直接解除 WudiTask 依赖。
+`in_progress` 表示至少一个 agent run 已由 Hub push 确认，不表示独占。多个不同
+login 可同时出现。GitHub delivery 仍独立派生为 `unstarted`、`assigned`、
+`implementing`、`review`、`ready_to_merge`、`verification_needed`、
+`cancelled` 或 `unavailable`。
 
-## 基础字段
+## Open task
+
+v3 open task 只允许以下字段：
 
 | 字段 | 说明 |
 | --- | --- |
-| `schema_version` | 固定为 `2` |
+| `schema_version` | 固定为 `3` |
 | `id` | `WDT-YYYYMMDDTHHMMSSZ-XXXXXX` |
-| `title` | 简短可扫描标题 |
-| `repo` | 实际执行仓，固定为 GitHub `owner/name` |
-| `source` | 唯一 canonical Issue、PR 或解释过的 text source |
-| `created_by` | 添加任务的 GitHub human identity |
+| `repo` | 实际执行仓，GitHub `owner/name` |
+| `source` | 唯一 canonical GitHub Issue/PR |
+| `created_by` | 创建任务的可读 GitHub login |
 | `priority` | `P0` 到 `P3` |
 | `created_at` | UTC RFC 3339 时间 |
-| `goal` | 期望结果 |
-| `context` | 执行约束、背景、入口与非目标 |
-| `acceptance_criteria` | 至少一条可验证完成条件 |
-| `dependencies` | 已存在的 WudiTask ID |
-| `claim` | 独占执行租约或 `null` |
-| `links` | 辅助资料；不再承载 canonical source |
-| `completion` | 仅 archived task 存在 |
+| `dependencies` | 已存在的 WudiTask IDs |
+| `active_agents` | 当前执行 runs 的数组 |
 
-schema v2 没有 `owner`。业务责任人来自 GitHub assignee；claim holder 直接由
-`claim.github_login/github_id` 表示。
+完整示例：
+
+```json
+{
+  "schema_version": 3,
+  "id": "WDT-20260711T120000Z-A1B2C3",
+  "repo": "acme/api",
+  "source": {
+    "kind": "github_issue",
+    "repo": "acme/api",
+    "number": 42
+  },
+  "created_by": "alice",
+  "priority": "P1",
+  "created_at": "2026-07-11T12:00:00Z",
+  "dependencies": [],
+  "active_agents": [
+    {
+      "login": "alice",
+      "run_id": "WDX-0123456789ABCDEF01234567"
+    },
+    {
+      "login": "bob",
+      "run_id": "WDX-89ABCDEF0123456789ABCDEF"
+    }
+  ]
+}
+```
+
+每个 login 最多一项，比较不区分大小写。`run_id` 标识该 login 的一次具体
+执行，用于阻止旧 release/archive 删除或确认同一 login 的新 run；它不是密码。
+Pages 只展示 login，不发布 run_id。
 
 ## Canonical source
 
-### 执行仓 Issue
+执行仓 Issue：
 
 ```json
-{
-  "kind": "github_issue",
-  "repo": "acme/api",
-  "number": 42
-}
+{"kind": "github_issue", "repo": "acme/api", "number": 42}
 ```
 
-### Pull request
+Pull request：
 
 ```json
-{
-  "kind": "github_pull_request",
-  "repo": "acme/api",
-  "number": 88
-}
+{"kind": "github_pull_request", "repo": "acme/api", "number": 88}
 ```
 
-URL 由 `kind + repo + number` 唯一推导，避免重复字段漂移。
-
-### Hub fallback Issue
-
-当业务仓关闭 Issues、当前用户没有建 Issue 权限，或跨仓工作没有合适的单一
-归属仓时，canonical Issue 可以在配置的 Task Hub：
+当执行仓不能承载 Issue 时，Hub Issue 仍是 canonical GitHub Issue，但保留显式
+fallback kind 与原因：
 
 ```json
 {
@@ -96,156 +134,88 @@ URL 由 `kind + repo + number` 唯一推导，避免重复字段漂移。
 }
 ```
 
-`github_issue` 与 `github_pull_request` 必须位于执行仓，且没有
-`fallback_reason`。只有 `github_issue_fallback` 可以跨仓；它必须指向安装配置的
-Hub，并包含 `fallback_reason`。CLI 在写 Hub 前还会确认该 Issue/PR 存在且可读。
-这让 JSON Schema 与 runtime 使用同一种结构，而不是靠可选字段猜测语义。Hub
-Issue 的正文必须说明执行仓、fallback 原因、范围与验收意图。
+URL 由 kind/repo/number 推导。不存在 text source；临时网络或权限失败必须报错，
+不能降级生成本地描述。Issue/PR body 必须在 add 前包含完整 scope 和 acceptance。
 
-### Text source
+## Assignment 与 active agents
 
-```json
-{
-  "kind": "text",
-  "reason": "Neither the execution repository nor the Hub can host an Issue."
-}
-```
+`assign TASK_ID [--to LOGIN]` 和 `unassign TASK_ID [--from LOGIN]` 只修改
+canonical GitHub source 的 assignee。默认 login 是当前认证用户；对另一个 login
+操作必须有明确用户授权。PR authorship 不能被 unassign。
 
-Text 只是最后手段。暂时的网络、认证或 API 故障不能静默降级成 text source。
+`release` 只修改 Hub；`execute` 的 Hub start 前可能有独立 GitHub self-assignment：
 
-## Identity 与 claim
+- 无 ID 的 execute 先选择 assigned-to-current-login 且 idle 的 ready task，再
+  选择 unowned ready task；不会选择只由其他人拥有的工作；
+- 自动选择 unowned task，或显式选择当前 login 尚非 owner 的 task 时，先
+  self-assign 当前 login 并确认 owner；
+- execute 添加 `{login,run_id}`，普通 Hub push 是启动确认点；
+- self-assignment 与 Hub start 不是原子事务；后者失败不回滚前者；
+- release 只在 login 与 run_id 同时匹配时删除该项；
+- unassign 在目标 login 仍 active 时拒绝，要求先逐 run release；
+- 一个 agent 的变更不得覆盖其他 login 的 entry。
 
-Identity：
+## Acceptance 与 archive
 
-```json
-{
-  "login": "octocat",
-  "github_id": 583231
-}
-```
+acceptance 只存在于 canonical Issue/PR，不存在 Hub `acceptance_criteria`。归档
+`done` 时，调用方读取 source、完成其验收、确认 Issue completed 或 PR merged，
+并提交至少一条具体 evidence。
 
-Claim：
-
-```json
-{
-  "token": "nonce",
-  "github_login": "octocat",
-  "github_id": 583231,
-  "claimed_at": "2026-07-11T12:04:10Z"
-}
-```
-
-`token` 标识一次具体租约，用于安全补偿，不是秘密。远端写操作始终通过
-`gh api user` 验证 human identity；不可变的 `github_id` 是授权键，login 用于
-展示并在用户改名后的下一次 execute 中刷新。agent 不是 owner。
-
-## 验收与归档
-
-Criterion：
+Archive 原子清空 `active_agents`，并新增：
 
 ```json
 {
-  "id": "AC-1",
-  "description": "Malformed files return HTTP 400",
-  "verification": {
-    "type": "command",
-    "value": "python3 -m unittest tests.test_upload"
+  "completion": {
+    "outcome": "done",
+    "completed_at": "2026-07-17T12:00:00Z",
+    "completed_by": "alice",
+    "result": "Validation implemented and verified.",
+    "evidence": [
+      "python3 -m unittest tests.test_upload: 12 passed",
+      "Merged pull request: https://github.com/acme/api/pull/88"
+    ],
+    "participants": [
+      {"login": "alice", "run_id": "WDX-0123456789ABCDEF01234567"},
+      {"login": "bob", "run_id": "WDX-89ABCDEF0123456789ABCDEF"}
+    ]
   }
 }
 ```
 
-`verification.type` 只能是 `command`、`file`、`manual` 或 `url`。
+`done` 的 `completed_by` 必须是 participants 中自己的 matching `run_id`。对
+`failed`/`cancelled`，只要归档前存在 active agents，也使用同一规则，并把当时
+全部 active entries 保存到 participants 后清空全集。若归档前没有 active agent，
+participants 可以为空，但 `completed_by` 必须等于 task `created_by`，且 CLI
+必须省略 `--run-id`；旧 run ID 会被拒绝而不是忽略。这个 creator-only 终态路径
+覆盖未认领或已经 release 的工作。
 
-`completion.outcome` 是 `done`、`failed` 或 `cancelled`。`done` 必须同时满足：
-
-1. canonical Issue 当前 completed（通常由 closing PR merge 触发），或 canonical
-   PR merged；open/reopened Issue 仍是 active；
-2. 每条 criterion 都有 `passed` 与非空 evidence；
-3. 当前 claim holder 完成远端 archive push。
-
-`failed`/`cancelled` 不要求先领取：只要任务当前无人领取，就可以用一次普通 Hub
-push 原子归档，即使依赖仍 blocked。若已有 claim，仍只允许对应 holder 归档。
-GitHub-backed `cancelled` 还必须先将 canonical delivery 以 `NOT_PLANNED` 关闭。
-`failed` 接受 `NOT_PLANNED`，也接受 delivery 已完成但 WudiTask 验收失败；活跃
-delivery 和未知状态都不能归档。text source 没有这层外部 guard。这些 outcome
-永不解除下游依赖。
-
-Issue `CLOSED/NOT_PLANNED` 只能映射为 cancelled 候选，不能作为 done。只有
-WudiTask archive `done` 且证据完整才解除下游依赖。
+`done` 解除下游依赖；`failed` 与 `cancelled` 永不解除。Issue
+`CLOSED/NOT_PLANNED` 只能对应 cancelled；nonterminal 或 unavailable delivery
+不能伪装成 terminal。
 
 ## 删除误建 archive
 
-delete 不改变 task schema v2，但 Hub 必须使用 tool API v3 识别删除回执。
-一个批次只有在所有目标都存在于 archive、ID 唯一且没有批次外
-open/archive task 依赖目标时，才会由单个 Hub commit 移除所有
-目标并写入一份回执。批次内部的依赖可随完整批次一起删除。
-
-回执是非 task JSON，精确字段为：
+`delete` 仅处理用户明确指定的错误 archive。单个 Hub commit 删除完整目标批次，
+并写入持久回执：
 
 ```json
 {
-  "receipt_version": 1,
+  "receipt_version": 2,
   "id": "WDR-DE897E092948A083BE2A1BC1",
-  "task_ids": [
-    "WDT-20260711T120000Z-A1B2C3",
-    "WDT-20260711T120001Z-D4E5F6"
-  ],
-  "reason": "Both records were created by mistake",
-  "deleted_by": {
-    "login": "alice",
-    "github_id": 1001
-  },
+  "task_ids": ["WDT-20260711T120000Z-A1B2C3"],
+  "reason": "This record was created by mistake",
+  "deleted_by": "alice",
   "deleted_at": "2026-07-17T12:00:00Z"
 }
 ```
 
-`task_ids` 必须非空、唯一且排序；reason 非空；`deleted_by` 是已验证的
-GitHub login 与不可变 numeric ID；`deleted_at` 是 UTC。确定性 receipt ID
-由排序后的 `task_ids`、去除首尾空白的 reason 和 `deleted_by.github_id`
-派生，不包含时间或可变 login。
+回执 ID 由排序 task IDs、规范化 reason 和 authenticated login 确定。回执永久
+保留被删 ID，阻止重建造成 ABA。删除不修改 GitHub source，也不能清除 Git
+历史、旧 clone 或 Pages artifact。
 
-当前数据契约禁止任务与任何回执重复 ID，也禁止两份回执覆盖同一
-任务 ID。因此已删除 ID 永久保留，后续 `add --id` 不能重建，避免
-ABA。幂等重试和远端 reconciliation 同时要求确定性回执匹配、所有
-目标任务都不存在；只有目标缺席不足以确认。不同 actor 或 reason
-会得到不同回执，不是同一操作。
+## Pages snapshot v3
 
-delete 不修改 `source` 指向的 GitHub Issue/PR。Git 历史、旧 clone 和已发布
-Pages artifact 仍可能包含原任务，因此 delete 不是 privacy/secret erasure。
-
-## 完整 open task 示例
-
-```json
-{
-  "schema_version": 2,
-  "id": "WDT-20260711T120000Z-A1B2C3",
-  "title": "Harden upload validation",
-  "repo": "acme/api",
-  "source": {
-    "kind": "github_issue",
-    "repo": "acme/api",
-    "number": 42
-  },
-  "created_by": {
-    "login": "alice",
-    "github_id": 1001
-  },
-  "priority": "P1",
-  "created_at": "2026-07-11T12:00:00Z",
-  "goal": "Reject malformed uploads before object storage.",
-  "context": ["Preserve the public API."],
-  "acceptance_criteria": [
-    {
-      "id": "AC-1",
-      "description": "Malformed files return HTTP 400.",
-      "verification": {
-        "type": "command",
-        "value": "python3 -m unittest tests.test_upload"
-      }
-    }
-  ],
-  "dependencies": [],
-  "claim": null,
-  "links": []
-}
-```
+Pages snapshot schema v3 合并 Hub coordination 与 live GitHub delivery。它可包含
+source title/body、owners、reviews/checks、completion evidence 与 active-agent
+logins；不得包含 active `run_id`。GitHub 查询失败必须保留 unavailable，不能把
+unknown owners 渲染成无人负责。

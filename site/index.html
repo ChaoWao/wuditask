@@ -9,6 +9,7 @@
     <link rel="stylesheet" href="styles.css">
   </head>
   <body>
+    <a class="skip-link" href="#main-content">Skip to content</a>
     <header class="topbar">
       <div class="brand">
         <span class="brand-mark" aria-hidden="true">W</span>
@@ -17,11 +18,16 @@
           <p>Distributed work queue</p>
         </div>
       </div>
-      <nav class="site-nav" aria-label="WudiTask pages">
-        <a class="is-active" href="index.html" aria-current="page">Tasks</a>
-        <a href="dag.html">Dependencies</a>
-        <a href="install.html">Install</a>
-      </nav>
+      <div class="site-navigation">
+        <nav class="site-nav site-nav-info" aria-label="Learn about WudiTask">
+          <a href="workflow.html">Workflow</a>
+          <a href="install.html">Join us</a>
+        </nav>
+        <nav class="site-nav site-nav-work" aria-label="Explore work">
+          <a class="is-active" href="index.html" aria-current="page">Tasks</a>
+          <a href="dag.html">Dependency graph</a>
+        </nav>
+      </div>
       <div class="sync-area">
         <span id="sync-status" class="sync-status" aria-live="polite">Loading</span>
         <a id="hub-link" class="hub-link" hidden rel="noreferrer">GitHub</a>
@@ -29,7 +35,7 @@
       </div>
     </header>
 
-    <main>
+    <main id="main-content">
       <section class="summary-band" aria-label="Task summary">
         <div class="summary-inner">
           <div class="metric">
@@ -42,7 +48,7 @@
           </div>
           <div class="metric metric-progress">
             <span id="count-progress" class="metric-value">0</span>
-            <span class="metric-label">Claimed</span>
+            <span class="metric-label">Active agents</span>
           </div>
           <div class="metric metric-blocked">
             <span id="count-blocked" class="metric-value">0</span>
@@ -98,7 +104,7 @@
           <span>Priority</span>
           <span>Task</span>
           <span>Repository</span>
-          <span>Claim</span>
+          <span>Agent</span>
           <span>Queue</span>
           <span>Delivery</span>
         </div>

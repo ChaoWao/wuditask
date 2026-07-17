@@ -1,408 +1,231 @@
 # 分布式协作工作流
 
-本文档描述从添加、领取、交付到归档的完整流程。GitHub Issue/PR 是描述、
-责任人与交付进展的事实源；独立 Task Hub 是执行租约、跨仓依赖、验收证据与
-归档结果的事实源。Pages 只读，agent 只通过 CLI 改任务数据。
+WudiTask 把 GitHub 责任人与 Hub agent execution 分开。canonical Issue/PR 是
+任务合同；Hub 只保存 priority、跨仓依赖、active runs 与归档结果。
 
 ## 角色
 
-| 角色 | 责任 |
+| 角色 | 职责 |
 | --- | --- |
-| Tool maintainer | 维护 schema、Python 工具、skills、dashboard 与工具发布 |
-| Task Hub maintainer | 维护 `hub.json`、任务数据、Pages workflow 与默认分支策略 |
-| Task author | 提供足够的目标、上下文、目标仓库、验收标准与依赖 |
-| GitHub assignee | 对 Issue 的业务交付负责，可与 agent 协作 |
-| Claim holder | 由 `gh` 识别，持有 WudiTask 独占执行租约 |
-| Agent | 调用 skill 与 CLI、修改工作仓库、执行验收、提交证据；不是 owner |
-| Reviewer | 根据 GitHub review 与 WudiTask evidence 检查结果 |
+| Requester | 在 canonical Issue/PR 写清目标、约束与 acceptance |
+| GitHub owner | PR author/assignee，或 Issue assignee/closing-linked PR author |
+| Active agent | Hub 中一个 `{login,run_id}` 执行记录 |
+| Task Hub maintainer | 维护独立 Hub remote、普通 push 权限和 Pages |
+| WudiTask maintainer | 维护 CLI、schema、十二个 skills 与测试 |
 
-## 0. 建立 Task Hub
+一个任务可以有多个 owners 和多个不同 login 的 active agents。assignment 不
+等于 execute。execute 选择 unowned task 时会先把当前 login self-assign 并确认，
+随后才独立启动 Hub run；这不是一个跨系统原子事务。
 
-1. 创建独立 Task Hub GitHub 仓库，首次演练可使用 private。
-2. 写入 tool API v3 的严格 `hub.json`、`data/open`、`data/archive`、
-   `data/deletions` 和 Pages workflow。
-3. Pages workflow 固定 checkout 一个 WudiTask 工具完整 commit SHA。
-4. 配置协作者普通 push 权限，并通过 GitHub ruleset 的
-   `non_fast_forward` 与 `deletion` 规则禁止 force push 和删除默认分支。
-5. 确认当前方案允许从该仓库发布 Pages；GitHub Free 的个人 private 仓不允许。
-6. 在 Settings > Pages 中选择 GitHub Actions，并创建仓库变量 `WUDITASK_PAGES_ENABLED=true`。
-7. 确认 Pages 的实际可见性；若没有 Enterprise 私有 Pages，使用脱敏任务。
-8. 等待 `Deploy WudiTask Pages` 成功。
+## 0. 建立 Hub 与 Pages
 
-Hub 同时启用 Issues，并安装 `.github/ISSUE_TEMPLATE/fallback-task.yml`。Issue
-属于 GitHub 元数据，不修改 Hub 数据分支，因此不会与 task JSON push 冲突。
-跨仓私有 source 需要配置只读 `WUDITASK_GITHUB_TOKEN`，其最小访问范围覆盖仓库
-元数据、Issues、pull requests、checks 与 commit statuses。
+Hub 是独立 Git 仓，根目录 `hub.json` 必须为 task schema 3 / tool API 4。
+默认分支保存 `data/open`、`data/archive` 和 `data/deletions`，只允许普通 push。
+Pages workflow 固定一个完整工具 commit SHA，用它 validate 并生成 snapshot
+schema v3；Pages 永远只读。
 
-未设置变量时，Hub workflow 仍执行 schema 校验和静态构建，但跳过 Pages
-上传与部署。工具测试只由工具仓 CI 执行。
-
-部署验收：
-
-```bash
-python3 TOOL/tools/wuditask.py --hub HUB --local validate
-python3 TOOL/tools/wuditask.py --hub HUB --local build-site --output _site
-cd TOOL && python3 -m unittest discover -s tests -v
-```
+Hub Issue 可以在执行仓无法承载 Issue 时作为 canonical fallback。Issue form 必须
+把执行仓、完整 narrative、acceptance 和依赖写入 Issue body；不存在 text task。
 
 ## 1. 每台机器注册访问
 
-用户只需克隆工具仓到任意位置，并知道独立 Task Hub 的 Git remote：
-
-```bash
-git clone git@github.com:ORG/wuditask.git ~/somewhere/wuditask
-```
-
-在该 clone 中：
-
-- Codex：调用 `$wuditask-install`
-- Claude Code：调用 `/wuditask-install`
-
-install skill 调用工具仓 Python，并显式配置 Hub：
+使用 `$wuditask-install`（Claude 为 `/wuditask-install`）注册工具 clone 与独立
+Hub remote：
 
 ```bash
 python3 tools/wuditask.py --json install \
-  --hub-remote https://github.com/ORG/wuditask-hub.git \
+  --hub-remote https://github.com/OWNER/wuditask-hub.git \
   --hub-branch main
 ```
 
-安装结果把工具路径与 Hub 远端分别写入 config schema v2，并创建 symlink，
-不执行 pip/npm 安装，也不复制 skill。installer 在用户 cache 中初始化或复用
-Hub bare repository，fetch 配置分支，并在隔离 worktree 中校验 `hub.json` 和
-任务数据。校验失败时不会写 config、skill link 或 launcher；已经取得的 Git
-objects 可以作为可删除 cache 保留。旧 `hub_path` 配置不兼容，也不会自动迁移。
+installer 校验精确的十二项 skill，并链接 add、archive、assign、check、delete、
+execute、install、list、release、selfupdate、show、unassign。它会安全移除仍指向
+本 clone 的旧 dep-check/reconcile symlink，不删除个人文件。
 
-cache 默认位于 `~/.cache/wuditask`；绝对路径的 `XDG_CACHE_HOME` 会覆盖
-`~/.cache`。`hubs/` 按 remote 和 branch 的哈希分桶，`operations/` 保存每条
-命令的唯一 worktree，`locks/` 只协调本机 cache 的 fetch 与 worktree 元数据。
-每个 operation 另持有独立 lease。正常完成时立即删除 worktree；若进程被强杀，
-下一条命令会回收已经无人持有 lease 的 orphan。bare repository 长期复用。
-cache 路径不进入 config，install JSON 通过 `hub_cache` 单独报告它。
+Hub bare cache 位于 `$XDG_CACHE_HOME/wuditask` 或 `~/.cache/wuditask`。每条命令
+使用独立 operation worktree；cache 可重建，不是事实源。
 
-### 更新 WudiTask 本体
-
-`/wuditask-selfupdate`（Codex 为 `$wuditask-selfupdate`）只升级配置中的
-工具 clone。CLI fetch `tool_remote/tool_branch`，在临时工具 clone 中运行
-完整工具测试后 `merge --ff-only`。它不读取或验证 live Hub，Hub 任务提交
-不会产生工具更新。dirty、local-ahead、diverged 或候选测试失败都保持当前
-工具版本不变，且不会自动 stash/reset/rebase。
-
-若用户在另一个工作仓发现 WudiTask 缺陷，使用
-`/wuditask-selfupdate fix <问题>`（Codex 为
-`$wuditask-selfupdate fix <问题>`）。agent 从配置的工具远端和分支创建
-隔离 worktree；直接维护不会在 Hub 中添加、领取或归档任务。
-
-这个 fix 是直接仓库维护，不是共享任务：不得为了描述它而创建 GitHub Issue，也不得调用 WudiTask `add`、`execute`、`archive`、`delete` 或 `release`。`fix` 是 agent 工作流关键词，不是 CLI 参数。
-
-工具仓与 Task Hub 的历史策略不同。direct fix 默认先普通 push；agent 自有工具
-分支经过 rebase/amend，或用户明确要求改写配置的工具分支时，可以对精确匹配
-配置的 `tool_remote` 使用
-`--force-with-lease=refs/heads/<branch>:<observed-oid>`。必须先 fetch、记录旧
-OID、审查被替换提交并重跑完整测试；lease 失败后停止检查新提交，不能刷新
-expected OID 后自动重试。禁止裸 `--force`、裸 `--force-with-lease`，也禁止
-将这个例外用于 `hub_remote`、他人的分支、tag 或 release。SSH/HTTPS remote
-必须先归一为 canonical `owner/name`；无法证明目标就是 `tool_remote` 且不同于
-`hub_remote` 时 fail closed。若配置的工具分支被改写，普通 selfupdate 会报告
-diverged；必须另行取得明确授权才能 reset、替换或重新 clone 本地安装。
-
-## 2. 添加任务
-
-用户可以在任意工作仓库中告诉 agent：
-
-> 添加一个任务：上传接口必须在写对象存储前拒绝格式错误的文件。
-
-agent 使用 `$wuditask-add`（Claude 为 `/wuditask-add`）：
-
-1. 读取当前工作仓库 `git remote get-url origin`。
-2. 先收集完整问题叙述，以及精简的 title、goal、context、acceptance criteria、verification、priority 与 dependencies；不清楚时先询问用户，不凭空定义“完成”。
-3. 在执行仓复用匹配 PR/Issue，或按该仓模板创建 Issue。
-4. 执行仓无法承载时，从 config 的 `hub_remote` 找到 Hub，使用 fallback Issue
-   form，并记录 `fallback_reason`。两边都不能承载时才使用解释过的 text source。
-5. 将 canonical Issue/PR 写入结构化 `source`；Hub fallback 使用独立的
-   `github_issue_fallback` kind，`links` 只保留辅助资料。
-6. WudiTask 只保留精简执行合同，不复制完整正文或 GitHub 可变进展。
-7. CLI 确认 source 存在且可读；跨仓 source 只接受配置 Hub 的 fallback Issue。
-8. CLI 从 config 的 `hub_remote/hub_branch` 写入，普通 push 确认后才报告 ID。
-
-Hub Issue 是正式 fallback，不是默认入口。目标仓适合承载时仍必须优先放在目标
-仓；暂时的网络或认证错误不能静默降级成 text。不得创建空 PR 充当说明。
-
-最低信息：
-
-- title：人可扫描的名称。
-- repo：唯一的 GitHub `owner/name`。
-- source：唯一 canonical Issue、PR，或解释过的 text source。
-- goal：期望结果，而不是笼统动作。
-- acceptance：至少一条可观察结果，最好带 command/file/url。
-
-依赖必须使用已经存在的 WudiTask ID。每个依赖任务自身携带仓库、目标和验收标准，父任务不复制。
-
-若 CLI 返回 `insufficient_task_spec`，agent 读取 `details.questions`，向用户补问后重试。若返回 `missing_dependency`，先添加依赖任务或纠正 ID。
-
-## 3. 领取并执行任务
-
-用户进入某个工作仓库并要求 agent 处理下一项任务。`$wuditask-execute`（Claude 为 `/wuditask-execute`）执行：
-
-1. 确认当前仓库没有会被意外覆盖的本地工作。
-2. 调用 `wuditask execute`，不传 ID 时按 P0 到 P3、创建时间、ID 排序。
-3. CLI 使用 `gh api user` 获取 login 与 numeric ID。
-4. CLI 从远端新快照中筛选：
-   - `repo` 等于当前工作仓库；
-   - claim 为空；
-   - 所有依赖已满足；
-   - 尚未归档。
-5. CLI 实时查询 source，只允许未开始、由当前用户负责或显式待验收的任务。
-6. CLI 写入 claim 并普通 push。未指派 Issue 随后指派当前用户；所有 GitHub
-   source 都在 push 后重新检查 ownership。失败或竞态触发带 token 的补偿。
-7. agent 仅在 `ok=true`、`confirmed=true`、`sync.confirmed=true` 且
-   `work_authorized=true` 后开工。
-
-显式领取：
+### 更新工具
 
 ```bash
-wuditask execute WDT-20260711T120000Z-A1B2C3
+wuditask selfupdate --check
+wuditask selfupdate
 ```
 
-自动领取：
+skill inventory 改变时，non-check update 返回 `reinstall_required=true`；随后无
+`--replace` 地重跑 install。直接维护工具使用 `$wuditask-selfupdate fix`，在
+`~/.wuditask/worktrees/<slug>` 隔离修改，不创建 Issue 或队列任务。Hub 永不
+force-push；工具仓只有在明确授权并带精确旧 OID 的 `--force-with-lease` 时允许
+改写 agent 自有历史。
+
+## 2. 先建立 source，再 add
+
+`$wuditask-add` 按顺序复用执行仓 PR、复用/创建执行仓 Issue、或在确有原因时
+创建 Hub fallback Issue。source 必须先包含完整目标、context、constraints、
+acceptance 与必要链接。
 
 ```bash
-wuditask execute
+wuditask add \
+  --repo acme/api \
+  --source https://github.com/acme/api/issues/42 \
+  --priority P1 \
+  --depends WDT-20260711T120000Z-A1B2C3
 ```
 
-同一任务被两台机器竞争时，只有一个普通 push 能基于当时 branch head 成功。
-失败方从新快照看到 claim，返回 `claim_conflict`。GitHub 与 Hub 无跨仓原子
-事务，因此 execute 使用 post-push 二次读取和补偿 release；任何不确定性都
-fail closed。显式领取已完成 delivery 只用于验收，返回
-`work_authorized=false`。`--hub --local` 永不编辑真实 GitHub assignment。
+Hub 只写最小协调字段，不复制 title/body/acceptance。临时认证或网络失败必须
+报错，不能创建 text source。只有 `ok=true`、`confirmed=true` 与
+`sync.confirmed=true` 同时成立才报告 task ID。
 
-### 执行中
+## 3. assign 与 unassign
 
-agent 应把 task 的以下内容当作执行合同：
-
-- `repo`：只能在这个工作仓库实施。
-- `goal`：最终结果。
-- `context`：约束、入口与非目标。
-- `acceptance_criteria`：完成前逐项验证。
-- `source`：完整问题叙述及实时交付进展。
-- `links`：辅助上下文。
-
-如果开工后发现信息仍不足：
-
-1. 暂停不可逆修改。
-2. 向用户提出具体问题。
-3. 信息澄清后继续。
-4. 若不应继续，调用 `release --reason` 返回队列；不要删除 open task 或手工清空 claim。
-
-## 4. 依赖检查
-
-使用 `$wuditask-dep-check`（Claude 为 `/wuditask-dep-check`）。这是纯读工作流。
-
-依赖检查有四层：
-
-1. `add`：拒绝不存在的依赖 ID。
-2. `execute`：领取前强制实时 dep-check。
-3. `archive done`：归档前再次检查，避免绕过阻塞。
-4. GitHub Actions/Pages：任务提交触发构建，并每小时安全刷新；浏览器每 60 秒刷新 snapshot。
-
-手工检查所有任务：
+assignment 只修改 canonical GitHub source，不写 Hub。
 
 ```bash
-wuditask --json dep-check
+wuditask assign TASK_ID
+wuditask assign TASK_ID --to other-login
+
+wuditask unassign TASK_ID
+wuditask unassign TASK_ID --from other-login
 ```
 
-检查单个任务：
+默认目标是当前认证 login。`--to`/`--from` 指向他人时必须有用户对该具体 login
+的明确授权，不能由 agent 推断。GitHub repository permissions 仍是最终 guard。
+
+PR owners 是 author + PR assignees；Issue owners 是 Issue assignees +
+closing-linked PR authors。普通 timeline mention 不产生 owner。移除 assignee 不会
+移除 authorship，因此 unassign 后目标可能仍是 owner。
+若该 login 仍有 active run，unassign 拒绝并要求先逐个 release；它绝不把停止
+执行隐含进 GitHub 操作。
+
+## 4. 统一 check
+
+`$wuditask-check` 是唯一的依赖与协调检查入口：
 
 ```bash
-wuditask --json dep-check WDT-20260711T120000Z-A1B2C3
+wuditask --json check [TASK_ID]
 ```
 
-每个依赖会展开：
+它同时报告：
 
-- task ID 与是否存在；
-- 工作仓库、title、goal；
-- acceptance criteria；
-- open/archive 位置；
-- completion outcome 与逐条 evidence；
-- 未就绪原因。
+- dependency closure、blockers 与 ready；
+- GitHub owners、Issue/PR delivery、reviews 与 checks；
+- Hub active-agent login/run_id；
+- active agent 不再是 owner、terminal task 待 archive、archive/source mismatch；
+- GitHub unavailable 等未知状态。
 
-依赖只有在“已 archive + outcome done + 所有验收 passed 且 evidence 非空”时完成。仍 open、failed、cancelled、缺证据、缺任务或成环都会阻塞。
+check 纯读。旧 `dep-check` 与 `reconcile` 命令和 skills 已删除，没有 alias。
+GitHub merge/close 不直接解除依赖；只有 WudiTask archive `done` 才解除。
 
-GitHub merge/close 只把 delivery 推进到 `verification_needed`，不会直接解除
-依赖。使用 `$wuditask-reconcile`（Claude 为 `/wuditask-reconcile`）对照实时
-delivery 与 coordination：
+## 5. execute agent run
+
+从任务的执行仓运行：
 
 ```bash
-wuditask --json reconcile
-wuditask --json reconcile WDT-20260711T120000Z-A1B2C3
+wuditask execute [TASK_ID]
 ```
 
-## 5. 验收与归档
+无 ID 时先选 assigned-to-current-login 且 idle 的 ready task，再选 unowned ready
+task；自动选择不会采用只由其他人拥有的工作。显式 task ID 表示用户选择加入该
+任务：若当前 login 尚非 owner，CLI 会先用 GitHub assignee API 把它添加为
+co-owner，不移除已有 owners。CLI 检查 execution repo、dependencies 与 live
+delivery，重新读取 owners 确认后才生成新的 `run_id`，并以另一笔普通 Hub push
+添加：
 
-agent 在工作仓库完成实现后，使用 `$wuditask-archive`（Claude 为 `/wuditask-archive`）：
+```json
+{"login": "alice", "run_id": "WDX-0123456789ABCDEF01234567"}
+```
 
-1. 确认 canonical Issue 当前为 completed（通常由 closing PR merge 触发），或
-   canonical PR 已 merged；open/reopened Issue 仍是 active。
-2. 逐条执行 task 中的 verification。
-3. 保留可复核证据，例如命令、测试数量、commit/PR、文件路径或人工观察。
-4. 确认代码已经按团队流程提交/推送到工作仓库。
-5. 调用 archive。
+不同 login 可以同时执行。同一 login 最多一个 active entry；已有 entry 返回
+`active_agent_conflict`，不能覆盖。Hub push 后再次读取 GitHub；若 owner/delivery
+竞态使启动不再合法，只按新 run_id 补偿删除本次 entry。
+
+self-assignment 和 Hub start 是两次明确事务，不伪装成原子操作。assignment 成功
+但 Hub start 失败或被补偿时，GitHub assignment 保留，CLI 明确报告没有 run
+启动；execute 不自动回滚 assignment。
+
+agent 只有在 `ok=true`、`confirmed=true`、`sync.confirmed=true`、
+`work_authorized=true` 且返回 run_id 后开工。保存 run_id，release/archive 都必须
+精确匹配它。
+
+## 6. release 一个 run
 
 ```bash
-wuditask archive WDT-20260711T120000Z-A1B2C3 \
+wuditask release TASK_ID \
+  --run-id RUN_ID \
+  --reason "Waiting for product decision"
+```
+
+release 只删除当前 authenticated login 的 matching run_id，不 unassign GitHub，
+不停止其他 login，也不能用旧 run_id 删除同一 login 的新 run。即使 GitHub
+unavailable 或外部已 unassign，release 仍可清理 Hub 执行状态。
+
+`agent_not_active` 或 `active_agent_run_mismatch` 必须停止；不要手改 JSON。
+
+## 7. acceptance 与 archive
+
+acceptance 只读 canonical Issue/PR。完成 source 中的验证、提交具体 evidence，
+并确认 Issue completed 或 PR merged：
+
+```bash
+wuditask archive TASK_ID \
+  --run-id RUN_ID \
   --outcome done \
-  --result "Malformed uploads now fail before storage" \
-  --evidence "AC-1=python3 -m unittest tests.test_upload: 12 passed" \
-  --evidence "AC-2=PR https://github.com/acme/api/pull/88 reviewed"
+  --result "Implemented and verified" \
+  --evidence "python3 -m unittest: 12 passed" \
+  --evidence "Merged PR: https://github.com/acme/api/pull/88"
 ```
 
-`done` 缺任意 criterion 的 evidence 时，CLI 返回 `insufficient_archive_evidence`，任务保持 open/in_progress。
-GitHub 尚未完成时返回 `github_delivery_incomplete`；GitHub 查询失败时 fail
-closed。Issue 以 `NOT_PLANNED` 关闭只能归档为 `cancelled`，不能 `done`。
+done 要求至少一条 evidence 与 matching active run。archive 的一个普通 Hub
+commit 移动文件、清空 active_agents，并在 completion 保存 outcome、result、
+evidence、completed_by 与所有 `{login,run_id}` participants。
 
-无法完成时仍归档保留历史：
+failed/cancelled 要求具体结果且不解除依赖；它们不受 dependency blocker 阻止，
+但必须对应 GitHub 明确终态。存在 active agents 时，调用者必须传自己的 matching
+`--run-id`，archive 会保存全部 participants 并清空全集。没有 active agent 时，
+只有 authenticated `created_by` 可以显式归档，并且必须省略 `--run-id`；旧 run
+ID 会被拒绝而不是忽略。该路径的 participants 为空，用于未认领或已经 release
+的终态任务。NOT_PLANNED 不能归档为 done。GitHub unavailable 时任何 outcome
+都 fail closed。
+
+## 8. list、show 与 Pages
+
+`$wuditask-list` 负责 scope/repo 过滤；`$wuditask-show` 展示一个 task；更深的
+依赖和 drift 使用 check。
+
+Pages 的 Tasks 页面分开显示 live owners 与 active-agent logins，不发布 run_id；
+Dependencies 页面按全部/单仓显示 DAG；Install 与 Workflow 页面说明加入和操作
+流程。snapshot 中 source body、owners、evidence 都可能公开，private source 要
+配置最小只读 token，并把 unavailable 保留为未知。
+
+## 9. 删除明确误建的 archive
+
+`$wuditask-delete` 只用于用户明确指出的误建、重复或测试 archive：
 
 ```bash
-wuditask archive TASK_ID \
-  --outcome failed \
-  --result "Upstream API cannot provide the required consistency guarantee"
+wuditask delete TASK_ID [TASK_ID ...] --reason "Created by mistake"
 ```
 
-或：
+完整批次必须没有批次外反向依赖。一个 Hub commit 删除记录并写持久 deletion
+receipt；ID 永久保留。delete 不改 GitHub source，也不清除 Git 历史、旧 clone
+或 Pages artifact，因此不是隐私擦除。
 
-```bash
-wuditask archive TASK_ID \
-  --outcome cancelled \
-  --result "Product requirement withdrawn"
-```
+## 10. 常见故障
 
-failed/cancelled 永远不会解除下游依赖。作者应重新规划下游任务，而不是伪造 done。
-未领取任务可以直接归档为 failed/cancelled，即使依赖 blocked；普通 Hub push
-负责与并发 claim 原子竞争。若任务已有 claim，仍只允许 holder 归档。
-GitHub-backed cancelled 必须先把 canonical Issue/PR 关闭为 not planned；failed
-可以来自 not planned，也可以来自 delivery 完成后的 WudiTask 验收失败，但不能
-在 delivery 仍活跃或未知时归档。text source 没有外部 terminal guard。
+- `dependency_blocked`：运行 check，完成并 done-archive blockers。
+- `github_delivery_unavailable`：状态未知；不 assign/execute/done archive。
+- `delivery_owner_required`：任务由他人负责；显式 assign 或选择别的任务。
+- `delivery_not_executable`：source 已 terminal 或当前状态不允许启动。
+- `active_agent_conflict`：同 login 已有 run；继续该 run 或先按其 run_id release。
+- `active_agent_run_mismatch`：参数是旧 run；不得重试为“当前任意 run”。
+- `insufficient_archive_evidence`：补充 source-defined acceptance 的具体证据。
+- `push_status_unknown`：不要开工。先用 check 查找错误详情中的精确 run_id；
+  若它已出现，先按该 run_id release，再重新 execute；若未出现，直接重新
+  execute。不要把“状态未知”当成成功。
 
-## 6. 删除明确误建的归档记录
+## 11. 团队治理
 
-普通任务无论 done、failed 或 cancelled 都保留在 archive。只有用户明确指出
-archived record 本身是误建、重复或测试数据时，才使用 `$wuditask-delete`
-（Claude 为 `/wuditask-delete`）。先用只读 list/show 把描述解析成精确 ID，
-再把完整批次一次提交：
-
-```bash
-wuditask delete \
-  WDT-20260711T120000Z-A1B2C3 \
-  WDT-20260711T120001Z-D4E5F6 \
-  --reason "Both records were created by mistake"
-```
-
-CLI 在删除任何文件前完成整批检查：reason 非空；ID 合法、唯一、存在且位于
-archive；所有 open 和 archived task 中不存在批次外 reverse dependency。
-若批次内部 A 依赖 B 且 A/B 一同删除则允许。任一检查失败时整批不变；远端
-使用一个普通、非 force commit/push，并在 non-fast-forward 后从新快照重跑
-全部检查。同一 commit 会移除 archive 文件，并在 `data/deletions/`
-写入持久回执：排序后的完整 ID 批次、reason、GitHub identity 和 UTC 时间。
-回执永久保留其中的任务 ID，后续不能以同 ID 重新创建。
-
-delete 只接受配置的远端 Hub，不支持 `--local`。本地目录没有一次提交多个
-文件的崩溃安全事务边界；CLI 不会在这里承诺虚假的批次原子性。
-
-确定性 receipt ID 由排序后的 ID、去除首尾空白的 reason 和当前用户的
-不可变 GitHub numeric ID 派生。重试或远端 reconciliation 只在该回执匹配且
-所有目标记录都已不存在时确认；只有记录缺席不是成功证据。不同 actor
-或 reason 会产生不同操作，不能互相冒认。
-
-delete 不关闭、重开、指派或改写 canonical GitHub Issue/PR。回执和 Git 历史
-保留 ID、reason、操作身份与时间；旧 clone 与已发布 Pages artifact
-仍可能包含原记录，因此 delete 不是 privacy/secret erasure。只有返回
-`ok=true`、`confirmed=true`、`sync.confirmed=true` 才能宣布完成。
-
-## 7. 释放任务
-
-使用 `$wuditask-release`（Claude 为 `/wuditask-release`）。
-
-claim holder 暂时无法继续、任务领错仓库或需要重新排队时：
-
-```bash
-wuditask release TASK_ID --reason "Waiting for product decision"
-```
-
-存在 claim 时，release 只允许当前 holder 操作；无 claim 的重试保持幂等。
-GitHub Issue source 会先移除当前用户的
-assignee、二次确认，再清 Hub claim；其他 assignee 不受影响。当前用户仍拥有
-active closing PR 时不能宣称任务已回队列，需先关闭或转移该 PR。任一端失败都
-fail closed；若 GitHub 已解除而 Hub push 未确认，lease 保持 locked/unknown，
-必须重试 release 或 reconcile。原因进入结果与 Git commit message，长期审计
-由 Git 历史保留。local mode 只改本地 Hub。
-
-## 8. 列出任务
-
-`$wuditask-list`（Claude 为 `/wuditask-list`）只运行 `list`，用于列出或筛选 open、archive 或 all 范围内的任务，不修改任务。
-
-## 9. 查看单个任务
-
-`$wuditask-show`（Claude 为 `/wuditask-show`）只运行 `show TASK_ID`，用于查看一个任务的完整字段和派生依赖状态，不修改任务。更深入的依赖就绪性分析交给 `wuditask-dep-check`。
-
-## 10. Pages 使用
-
-人类打开 GitHub Pages 可以：
-
-- 查看 ready、in progress、blocked 与 archived 数量；
-- 在当前 Open/Archive 页签内按实际存在的仓库、状态和关键词过滤；
-- 分列查看 WudiTask queue state 与 GitHub delivery state；
-- 展开 canonical source、assignees、closing PR、claim、验收标准和依赖；
-- 检查归档 outcome 与 evidence。
-- 阅读从工具仓 `site/install.md` 构建的安装与使用说明；
-- 查看全部执行仓之间的任务依赖 DAG，或筛选一个仓的内部 DAG；全仓视图按仓
-  着色，节点显示 canonical Issue/PR 编号，text source 退回 task ID。
-
-Pages 不提供 Add/Execute/Archive 按钮，这是有意的：所有写操作必须经过身份、依赖、schema 与普通 push 协议。Hub workflow 固定工具版本以保证构建可复现；工具测试只在工具仓 CI 运行。
-
-snapshot 还包含 source repo/URL、assignees、closing PR 作者/URL、review/check
-摘要、delivery 时间与查询错误。把这些字段与 title、goal、context、claim、
-evidence 一并视为对 Pages 读者可见；私有数据必须脱敏或使用受限 Pages。
-
-## 11. 故障处理
-
-### `claim_conflict`
-
-目标任务已有另一 claim holder。agent 不工作，领取下一项或等待用户指示。
-
-### `delivery_owned_elsewhere`
-
-GitHub 已由其他 assignee 或 active closing-PR author 负责。不要建立第二套责任人。
-
-### `github_delivery_unavailable`
-
-GitHub 状态未知。读命令和 Pages 显示 unavailable；新的 execute 和 done archive
-fail closed，不能把未知当作无人负责或已经完成。
-
-### `no_ready_task`
-
-当前仓库没有可领取任务。查看返回的 blockers，再运行 dep-check；不要绕过依赖。
-
-### `push_status_unknown`
-
-网络或认证错误导致服务端结果不明确。CLI 会先尝试从远端重新读取并对比完整任务；delete 则同时要求匹配本次确定性回执和完整目标批次均已不存在。满足 postcondition 时返回 `confirmation=remote_reconciliation`。仍无法确认时，agent fail closed，不开始/不宣布完成；使用 `error.details.task_id` 或 `task_ids` 重试同一显式命令。execute 必须改成 `execute TASK_ID`，避免恢复时领取第二项。
-
-### `concurrent_update_exhausted`
-
-短时间内远端持续变化超过重试次数。稍后重试。禁止用 force push“解决”。
-
-### Pages 构建失败
-
-先看 Actions 的 validate 步骤。修复 JSON/schema/依赖错误后普通 push。Pages 故障不改变 Git 中的任务事实。
-
-## 12. 团队治理
-
-- task author 对信息充分性负责。
-- GitHub assignee 对交付负责；claim holder 对执行租约与证据真实性负责。
-- maintainer 对 schema、CLI 与 skills 的当前契约一致性负责。
-- archive 只能通过带 reason 和 reverse-dependency guard 的 delete CLI 删除；
-  任何参与者都不得直接删除 task JSON。
-- 任何参与者都不得 force-push Task Hub。
-- 工具仓维护者只在明确改写代码历史时使用带精确旧 OID 的
-  `--force-with-lease`；该权限不传播到 Task Hub。
-- 敏感信息不得写入会公开发布的 Pages 数据。
-- 定期 reconcile 长期 in-progress 或外部 active delivery；由 claim holder release，
-  或通过明确维护流程处理。
+- GitHub owners 负责业务交付；每个 active agent 只对自己的 run 负责。
+- 多 agent 协作是集合并发，不会形成单人独占。
+- 默认分支禁止 force push；Hub 写入必须能由普通 push 确认。
+- 定期 check active agent 与 owner drift、terminal 未 archive 和长期 blocker。
+- source 先于 queue entry，acceptance 与讨论只维护在一个 Issue/PR。

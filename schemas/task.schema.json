@@ -1,36 +1,25 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "urn:wuditask:schema:task:v2",
+  "$id": "urn:wuditask:schema:task:v3",
   "title": "WudiTask task",
   "type": "object",
   "additionalProperties": false,
   "required": [
     "schema_version",
     "id",
-    "title",
     "repo",
     "source",
     "created_by",
     "priority",
     "created_at",
-    "goal",
-    "context",
-    "acceptance_criteria",
     "dependencies",
-    "claim",
-    "links"
+    "active_agents"
   ],
   "properties": {
-    "schema_version": {
-      "const": 2
-    },
+    "schema_version": {"const": 3},
     "id": {
       "type": "string",
       "pattern": "^WDT-[0-9]{8}T[0-9]{6}Z-[0-9A-F]{6}$"
-    },
-    "title": {
-      "type": "string",
-      "minLength": 1
     },
     "repo": {
       "type": "string",
@@ -38,49 +27,14 @@
     },
     "source": {
       "oneOf": [
-        {
-          "$ref": "#/$defs/githubIssueSource"
-        },
-        {
-          "$ref": "#/$defs/githubPullRequestSource"
-        },
-        {
-          "$ref": "#/$defs/githubFallbackIssueSource"
-        },
-        {
-          "$ref": "#/$defs/textSource"
-        }
+        {"$ref": "#/$defs/githubIssueSource"},
+        {"$ref": "#/$defs/githubPullRequestSource"},
+        {"$ref": "#/$defs/githubFallbackIssueSource"}
       ]
     },
-    "created_by": {
-      "$ref": "#/$defs/identity"
-    },
-    "priority": {
-      "enum": ["P0", "P1", "P2", "P3"]
-    },
-    "created_at": {
-      "type": "string",
-      "format": "date-time",
-      "pattern": "Z$"
-    },
-    "goal": {
-      "type": "string",
-      "minLength": 1
-    },
-    "context": {
-      "type": "array",
-      "items": {
-        "type": "string",
-        "minLength": 1
-      }
-    },
-    "acceptance_criteria": {
-      "type": "array",
-      "minItems": 1,
-      "items": {
-        "$ref": "#/$defs/acceptanceCriterion"
-      }
-    },
+    "created_by": {"$ref": "#/$defs/login"},
+    "priority": {"enum": ["P0", "P1", "P2", "P3"]},
+    "created_at": {"type": "string", "format": "date-time", "pattern": "Z$"},
     "dependencies": {
       "type": "array",
       "uniqueItems": true,
@@ -89,44 +43,28 @@
         "pattern": "^WDT-[0-9]{8}T[0-9]{6}Z-[0-9A-F]{6}$"
       }
     },
-    "claim": {
-      "oneOf": [
-        {
-          "type": "null"
-        },
-        {
-          "$ref": "#/$defs/claim"
-        }
-      ]
-    },
-    "links": {
+    "active_agents": {
       "type": "array",
-      "items": {
-        "type": "string",
-        "minLength": 1
-      }
+      "items": {"$ref": "#/$defs/agent"}
     },
-    "completion": {
-      "$ref": "#/$defs/completion"
-    }
+    "completion": {"$ref": "#/$defs/completion"}
   },
+  "allOf": [
+    {
+      "if": {"required": ["completion"]},
+      "then": {"properties": {"active_agents": {"maxItems": 0}}}
+    }
+  ],
   "$defs": {
+    "login": {"type": "string", "minLength": 1},
     "githubIssueSource": {
       "type": "object",
       "additionalProperties": false,
       "required": ["kind", "repo", "number"],
       "properties": {
-        "kind": {
-          "const": "github_issue"
-        },
-        "repo": {
-          "type": "string",
-          "pattern": "^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$"
-        },
-        "number": {
-          "type": "integer",
-          "minimum": 1
-        }
+        "kind": {"const": "github_issue"},
+        "repo": {"type": "string", "pattern": "^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$"},
+        "number": {"type": "integer", "minimum": 1}
       }
     },
     "githubPullRequestSource": {
@@ -134,17 +72,9 @@
       "additionalProperties": false,
       "required": ["kind", "repo", "number"],
       "properties": {
-        "kind": {
-          "const": "github_pull_request"
-        },
-        "repo": {
-          "type": "string",
-          "pattern": "^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$"
-        },
-        "number": {
-          "type": "integer",
-          "minimum": 1
-        }
+        "kind": {"const": "github_pull_request"},
+        "repo": {"type": "string", "pattern": "^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$"},
+        "number": {"type": "integer", "minimum": 1}
       }
     },
     "githubFallbackIssueSource": {
@@ -152,103 +82,19 @@
       "additionalProperties": false,
       "required": ["kind", "repo", "number", "fallback_reason"],
       "properties": {
-        "kind": {
-          "const": "github_issue_fallback"
-        },
-        "repo": {
-          "type": "string",
-          "pattern": "^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$"
-        },
-        "number": {
-          "type": "integer",
-          "minimum": 1
-        },
-        "fallback_reason": {
-          "type": "string",
-          "minLength": 1
-        }
+        "kind": {"const": "github_issue_fallback"},
+        "repo": {"type": "string", "pattern": "^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$"},
+        "number": {"type": "integer", "minimum": 1},
+        "fallback_reason": {"type": "string", "minLength": 1}
       }
     },
-    "textSource": {
+    "agent": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["kind", "reason"],
+      "required": ["login", "run_id"],
       "properties": {
-        "kind": {
-          "const": "text"
-        },
-        "reason": {
-          "type": "string",
-          "minLength": 1
-        }
-      }
-    },
-    "identity": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": ["login", "github_id"],
-      "properties": {
-        "login": {
-          "type": "string",
-          "minLength": 1
-        },
-        "github_id": {
-          "type": "integer",
-          "minimum": 1
-        }
-      }
-    },
-    "acceptanceCriterion": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": ["id", "description", "verification"],
-      "properties": {
-        "id": {
-          "type": "string",
-          "pattern": "^AC-[1-9][0-9]*$"
-        },
-        "description": {
-          "type": "string",
-          "minLength": 1
-        },
-        "verification": {
-          "type": "object",
-          "additionalProperties": false,
-          "required": ["type", "value"],
-          "properties": {
-            "type": {
-              "enum": ["command", "file", "manual", "url"]
-            },
-            "value": {
-              "type": "string",
-              "minLength": 1
-            }
-          }
-        }
-      }
-    },
-    "claim": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": ["token", "github_login", "github_id", "claimed_at"],
-      "properties": {
-        "token": {
-          "type": "string",
-          "minLength": 1
-        },
-        "github_login": {
-          "type": "string",
-          "minLength": 1
-        },
-        "github_id": {
-          "type": "integer",
-          "minimum": 1
-        },
-        "claimed_at": {
-          "type": "string",
-          "format": "date-time",
-          "pattern": "Z$"
-        }
+        "login": {"$ref": "#/$defs/login"},
+        "run_id": {"type": "string", "pattern": "^WDX-[0-9A-F]{24}$"}
       }
     },
     "completion": {
@@ -259,46 +105,34 @@
         "completed_at",
         "completed_by",
         "result",
-        "acceptance_results"
+        "evidence",
+        "participants"
       ],
       "properties": {
-        "outcome": {
-          "enum": ["done", "failed", "cancelled"]
-        },
-        "completed_at": {
-          "type": "string",
-          "format": "date-time",
-          "pattern": "Z$"
-        },
-        "completed_by": {
-          "$ref": "#/$defs/identity"
-        },
-        "result": {
-          "type": "string",
-          "minLength": 1
-        },
-        "acceptance_results": {
+        "outcome": {"enum": ["done", "failed", "cancelled"]},
+        "completed_at": {"type": "string", "format": "date-time", "pattern": "Z$"},
+        "completed_by": {"$ref": "#/$defs/login"},
+        "result": {"type": "string", "minLength": 1},
+        "evidence": {
           "type": "array",
-          "items": {
-            "type": "object",
-            "additionalProperties": false,
-            "required": ["criterion_id", "status", "evidence"],
+          "items": {"type": "string", "minLength": 1}
+        },
+        "participants": {
+          "type": "array",
+          "items": {"$ref": "#/$defs/agent"}
+        }
+      },
+      "allOf": [
+        {
+          "if": {"properties": {"outcome": {"const": "done"}}},
+          "then": {
             "properties": {
-              "criterion_id": {
-                "type": "string",
-                "minLength": 1
-              },
-              "status": {
-                "enum": ["passed", "failed", "skipped"]
-              },
-              "evidence": {
-                "type": "string",
-                "minLength": 1
-              }
+              "evidence": {"minItems": 1},
+              "participants": {"minItems": 1}
             }
           }
         }
-      }
+      ]
     }
   }
 }

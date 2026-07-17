@@ -18,6 +18,7 @@ from .util import atomic_write_json, utc_now
 DeliveryFetcher = Callable[[Mapping[str, Any]], dict[str, Any]]
 
 INSTALL_CONTENT_MARKER = "<!-- WUDITASK_INSTALL_CONTENT -->"
+WORKFLOW_CONTENT_MARKER = "<!-- WUDITASK_WORKFLOW_CONTENT -->"
 _HEADING_RE = re.compile(r"^(#{1,6})\s+(.+?)\s*$")
 _UNORDERED_ITEM_RE = re.compile(r"^\s*[-*+]\s+(.+?)\s*$")
 _ORDERED_ITEM_RE = re.compile(r"^\s*\d+[.)]\s+(.+?)\s*$")
@@ -31,10 +32,16 @@ _COPIED_SITE_ASSETS = (
     "dag.html",
     "dag.js",
     "install.md",
+    "workflow.md",
 )
-_SITE_SOURCE_FILES = (*_COPIED_SITE_ASSETS, "install.template.html")
+_SITE_SOURCE_FILES = (
+    *_COPIED_SITE_ASSETS,
+    "install.template.html",
+    "workflow.template.html",
+)
 _GENERATED_SITE_FILES = (
     "install.html",
+    "workflow.html",
     "snapshot.json",
     ".nojekyll",
     ".wuditask-site",
@@ -84,7 +91,7 @@ def _starts_block(line: str) -> bool:
 
 
 def _render_markdown(markdown: str) -> str:
-    """Render the deliberately small, raw-HTML-free install-guide subset."""
+    """Render the deliberately small, raw-HTML-free document subset."""
 
     lines = markdown.splitlines()
     rendered: list[str] = []
@@ -158,28 +165,82 @@ def _render_markdown(markdown: str) -> str:
     return "\n".join(rendered)
 
 
-def _render_install_page(source: Path) -> str:
-    template = (source / "install.template.html").read_text(encoding="utf-8")
-    marker_count = template.count(INSTALL_CONTENT_MARKER)
+def _render_markdown_page(
+    source: Path,
+    *,
+    template_name: str,
+    markdown_name: str,
+    marker: str,
+    error_code: str,
+    page_name: str,
+) -> str:
+    template = (source / template_name).read_text(encoding="utf-8")
+    marker_count = template.count(marker)
     if marker_count != 1:
         raise WudiTaskError(
-            "site_install_template_invalid",
-            "Install page template must contain exactly one content marker.",
+            error_code,
+            f"{page_name} page template must contain exactly one content marker.",
             details={
-                "marker": INSTALL_CONTENT_MARKER,
+                "marker": marker,
                 "marker_count": marker_count,
             },
         )
-    markdown = (source / "install.md").read_text(encoding="utf-8")
-    return template.replace(INSTALL_CONTENT_MARKER, _render_markdown(markdown))
+    markdown = (source / markdown_name).read_text(encoding="utf-8")
+    return template.replace(marker, _render_markdown(markdown))
+
+
+def _render_install_page(source: Path) -> str:
+    return _render_markdown_page(
+        source,
+        template_name="install.template.html",
+        markdown_name="install.md",
+        marker=INSTALL_CONTENT_MARKER,
+        error_code="site_install_template_invalid",
+        page_name="Install",
+    )
+
+
+def _render_workflow_page(source: Path) -> str:
+    return _render_markdown_page(
+        source,
+        template_name="workflow.template.html",
+        markdown_name="workflow.md",
+        marker=WORKFLOW_CONTENT_MARKER,
+        error_code="site_workflow_template_invalid",
+        page_name="Workflow",
+    )
+
+
+def _public_snapshot_value(value: Any) -> Any:
+    """Copy Hub data for Pages without publishing per-run identifiers."""
+
+    if isinstance(value, Mapping):
+        public: dict[str, Any] = {}
+        for key, item in value.items():
+            if key == "run_id":
+                continue
+            if key in {"active_agents", "participants"} and isinstance(item, list):
+                public[key] = [
+                    {"login": agent["login"]}
+                    for agent in item
+                    if isinstance(agent, Mapping)
+                    and isinstance(agent.get("login"), str)
+                ]
+                continue
+            public[key] = _public_snapshot_value(item)
+        return public
+    if isinstance(value, list):
+        return [_public_snapshot_value(item) for item in value]
+    return value
 
 
 def build_snapshot(
     index: TaskIndex,
     *,
     hub_repo: str | None = None,
-    delivery_fetcher: DeliveryFetcher = fetch_delivery,
+    delivery_fetcher: DeliveryFetcher | None = None,
 ) -> dict[str, Any]:
+    fetch = delivery_fetcher or fetch_delivery
     open_report = dependency_report(index)
     report_by_id = {task["id"]: task for task in open_report["tasks"]}
     open_tasks = []
@@ -193,18 +254,22 @@ def build_snapshot(
     ):
         task = record.task
         open_tasks.append(
-            {
-                **task,
-                "derived": report_by_id[task["id"]],
-                "delivery": delivery_fetcher(task["source"]),
-            }
+            _public_snapshot_value(
+                {
+                    **task,
+                    "derived": report_by_id[task["id"]],
+                    "delivery": fetch(task["source"]),
+                }
+            )
         )
     archived_tasks = [
-        {
-            **record.task,
-            "derived": task_dependency_report(record, index),
-            "delivery": delivery_fetcher(record.task["source"]),
-        }
+        _public_snapshot_value(
+            {
+                **record.task,
+                "derived": task_dependency_report(record, index),
+                "delivery": fetch(record.task["source"]),
+            }
+        )
         for record in sorted(
             index.archived.values(),
             key=lambda item: (
@@ -220,7 +285,7 @@ def build_snapshot(
         outcomes[outcome] = outcomes.get(outcome, 0) + 1
     repos = sorted({task["repo"] for task in open_tasks + archived_tasks})
     return {
-        "schema_version": 2,
+        "schema_version": 3,
         "generated_at": utc_now(),
         "hub_repo": hub_repo,
         "counts": {
@@ -240,6 +305,7 @@ def build_site(
     source: Path,
     output: Path,
     hub_repo: str | None = None,
+    delivery_fetcher: DeliveryFetcher | None = None,
 ) -> dict[str, Any]:
     source = source.resolve()
     output = output.resolve()
@@ -257,6 +323,7 @@ def build_site(
             details={"missing": missing, "source": str(source)},
         )
     install_page = _render_install_page(source)
+    workflow_page = _render_workflow_page(source)
     generated_names = {*_COPIED_SITE_ASSETS, *_GENERATED_SITE_FILES}
     if output.exists() and not output.is_dir():
         raise WudiTaskError(
@@ -281,7 +348,15 @@ def build_site(
         install_page,
         encoding="utf-8",
     )
-    snapshot = build_snapshot(index, hub_repo=hub_repo)
+    (output / "workflow.html").write_text(
+        workflow_page,
+        encoding="utf-8",
+    )
+    snapshot = build_snapshot(
+        index,
+        hub_repo=hub_repo,
+        delivery_fetcher=delivery_fetcher,
+    )
     atomic_write_json(output / "snapshot.json", snapshot)
     (output / ".nojekyll").touch()
     (output / ".wuditask-site").touch()

@@ -1,4 +1,4 @@
 interface:
   display_name: "Show WudiTask"
-  short_description: "Show one WudiTask and its derived state"
-  default_prompt: "Use $wuditask-show to display one WudiTask and its dependency state."
+  short_description: "Show source owners agents and derived state"
+  default_prompt: "Use $wuditask-show to display one task, its source owners, active agents, and dependencies."

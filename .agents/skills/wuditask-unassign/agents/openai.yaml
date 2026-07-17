@@ -1,0 +1,4 @@
+interface:
+  display_name: "Unassign WudiTask"
+  short_description: "Remove GitHub assignment without stopping agents"
+  default_prompt: "Use $wuditask-unassign to remove an explicitly authorized GitHub assignee from this task source."
