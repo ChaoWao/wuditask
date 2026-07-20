@@ -117,6 +117,8 @@ class SkillTests(unittest.TestCase):
         self.assertIn("acceptance contract", archive)
         self.assertIn("--run-id RUN_ID", archive)
         self.assertIn("--evidence", archive)
+        self.assertIn("all outcomes must omit `--run-id`", archive)
+        self.assertIn("authenticated `created_by`", archive)
         self.assertNotIn("AC-N", archive)
 
     def test_delete_is_explicit_and_preserves_dependency_integrity(self) -> None:

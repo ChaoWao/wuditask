@@ -283,6 +283,7 @@ class SiteTests(unittest.TestCase):
             self.assertIn("Assignment failed or unconfirmed → Stop", workflow)
             self.assertIn("Confirmed + drift → Compensate exact new run", workflow)
             self.assertIn("No active agents → Creator only", workflow)
+            self.assertIn("successful done still requires concrete evidence", workflow)
             self.assertIn(
                 '<ol class="workflow-stage-track" aria-label="Main lifecycle path">',
                 workflow,

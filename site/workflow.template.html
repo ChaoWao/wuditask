@@ -211,7 +211,7 @@
               </div>
               <div class="workflow-outcome outcome-yes">
                 <strong>Done → Archive + unlock</strong>
-                <p>Require terminal delivery, matching active run and concrete evidence.</p>
+                <p>Require ready dependencies, successful terminal delivery and concrete evidence.</p>
               </div>
               <div class="workflow-outcome outcome-stop">
                 <strong>Failed / cancelled keeps dependents blocked</strong>
@@ -219,7 +219,7 @@
               </div>
               <div class="workflow-outcome outcome-stop">
                 <strong>No active agents → Creator only</strong>
-                <p>The task creator may archive terminal failed or cancelled only without a run ID.</p>
+                <p>The creator omits the run ID for any terminal outcome; successful done still requires concrete evidence.</p>
               </div>
             </section>
           </section>

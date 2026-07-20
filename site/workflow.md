@@ -61,9 +61,9 @@ Release stops only the authenticated login's exact run. It preserves GitHub owne
 wuditask release TASK_ID --run-id RUN_ID --reason "Waiting for input"
 ```
 
-A done archive requires terminal successful delivery, the caller's matching active run and concrete acceptance evidence. The archive commit moves the task out of open state, records the result and participants, clears all active agents, and unlocks downstream dependencies.
+A done archive requires ready dependencies, terminal successful delivery and concrete acceptance evidence. While agents are active, the caller must provide a matching run, remain a live owner for done, and the archive records every participant before clearing the set.
 
-Failed or cancelled archives require an explicit terminal GitHub state and never satisfy dependencies. While agents are active, the caller must provide a matching run and the archive records every participant before clearing the set. With no active agents, only the authenticated task creator may archive the terminal failure or cancellation, and the command must omit a run ID.
+With no active agents, only the authenticated task creator may archive any matching terminal outcome, and the command must omit a run ID; participants are empty and successful done still requires concrete evidence. Failed or cancelled archives never satisfy dependencies. Stale run IDs are rejected instead of ignored.
 
 Unassign changes GitHub only. It refuses to remove a login with an active run; release each exact run first. Authorship or a valid closing-linked pull request can keep someone in the owner set even after their assignee entry is removed.
 

@@ -224,19 +224,18 @@ def _validate_completion(
             for participant in participants
         )
     )
-    unclaimed_terminal_by_creator = (
-        outcome in {"failed", "cancelled"}
-        and participants == []
+    unclaimed_by_creator = (
+        participants == []
         and isinstance(completed_by, str)
         and isinstance(created_by, str)
         and completed_by.casefold() == created_by.casefold()
     )
     if isinstance(completed_by, str) and not (
-        completed_by_is_participant or unclaimed_terminal_by_creator
+        completed_by_is_participant or unclaimed_by_creator
     ):
         message = (
-            "must identify a participant or the task creator for a non-done outcome"
-            if outcome in {"failed", "cancelled"} and participants == []
+            "must identify a participant or the task creator when participants are empty"
+            if participants == []
             else "must identify a participant"
         )
         _issue(

@@ -194,6 +194,149 @@ class WorkflowTests(unittest.TestCase):
         self.assertEqual("alice", archived["task"]["completion"]["completed_by"])
         self.assertEqual(["Tests passed", "PR merged"], archived["task"]["completion"]["evidence"])
 
+    def test_unclaimed_done_archive_allows_creator_with_evidence(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            repository = make_repository(Path(temporary))
+            add_task(repository, PARENT_ID)
+            with patch(
+                "wuditask.workflow.fetch_delivery",
+                return_value=delivery("verification_needed", ["bob"]),
+            ):
+                archived = archive_task(
+                    repository,
+                    ACTOR,
+                    PARENT_ID,
+                    outcome="done",
+                    result="Delivered outside an active WudiTask run.",
+                    evidence=["Merged pull request", "16/16 checks passed"],
+                    run_id=None,
+                    now="2026-07-11T13:00:00Z",
+                )
+                retry = archive_task(
+                    repository,
+                    ACTOR,
+                    PARENT_ID,
+                    outcome="done",
+                    result="Delivered outside an active WudiTask run.",
+                    evidence=["Merged pull request", "16/16 checks passed"],
+                    run_id=None,
+                    now="2026-07-11T13:00:00Z",
+                )
+                with self.assertRaises(WudiTaskError) as stale_retry:
+                    archive_task(
+                        repository,
+                        ACTOR,
+                        PARENT_ID,
+                        outcome="done",
+                        result="Delivered outside an active WudiTask run.",
+                        evidence=["Merged pull request", "16/16 checks passed"],
+                        run_id=RUN_ID,
+                        now="2026-07-11T13:00:00Z",
+                    )
+
+        self.assertIsNone(archived["run_id"])
+        self.assertEqual([], archived["task"]["completion"]["participants"])
+        self.assertEqual("alice", archived["task"]["completion"]["completed_by"])
+        self.assertTrue(retry["already_archived"])
+        self.assertFalse(retry["changed"])
+        self.assertEqual("task_already_archived", stale_retry.exception.code)
+
+    def test_active_done_archive_still_requires_live_owner(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            repository = make_repository(Path(temporary))
+            add_task(repository, PARENT_ID)
+            with patch(
+                "wuditask.workflow.fetch_delivery",
+                return_value=delivery("review", ["alice"]),
+            ):
+                start_agent(repository, ACTOR, task_id=PARENT_ID, run_id=RUN_ID)
+
+            with patch(
+                "wuditask.workflow.fetch_delivery",
+                return_value=delivery("verification_needed", ["bob"]),
+            ):
+                with self.assertRaises(WudiTaskError) as raised:
+                    archive_task(
+                        repository,
+                        ACTOR,
+                        PARENT_ID,
+                        outcome="done",
+                        result="Done",
+                        evidence=["tests"],
+                        run_id=RUN_ID,
+                    )
+
+        self.assertEqual("delivery_owner_required", raised.exception.code)
+
+    def test_unclaimed_done_archive_preserves_safety_guards(self) -> None:
+        cases = (
+            (
+                "missing evidence",
+                [],
+                None,
+                "verification_needed",
+                False,
+                "insufficient_archive_evidence",
+            ),
+            (
+                "stale run",
+                ["tests"],
+                RUN_ID,
+                "verification_needed",
+                False,
+                "archive_run_id_unexpected",
+            ),
+            (
+                "blocked dependency",
+                ["tests"],
+                None,
+                "verification_needed",
+                True,
+                "dependency_blocked",
+            ),
+            (
+                "nonterminal delivery",
+                ["tests"],
+                None,
+                "assigned",
+                False,
+                "github_delivery_incomplete",
+            ),
+            (
+                "unavailable delivery",
+                ["tests"],
+                None,
+                "unavailable",
+                False,
+                "github_delivery_unavailable",
+            ),
+        )
+        for label, evidence, run_id, state, blocked, expected in cases:
+            with self.subTest(case=label), tempfile.TemporaryDirectory() as temporary:
+                repository = make_repository(Path(temporary))
+                dependencies: list[str] = []
+                if blocked:
+                    add_task(repository, DEPENDENCY_ID)
+                    dependencies.append(DEPENDENCY_ID)
+                add_task(repository, PARENT_ID, dependencies=dependencies)
+                with patch(
+                    "wuditask.workflow.fetch_delivery",
+                    return_value=delivery(state, ["bob"]),
+                ):
+                    with self.assertRaises(WudiTaskError) as raised:
+                        archive_task(
+                            repository,
+                            ACTOR,
+                            PARENT_ID,
+                            outcome="done",
+                            result="Delivered outside an active WudiTask run.",
+                            evidence=evidence,
+                            run_id=run_id,
+                        )
+
+                self.assertEqual(expected, raised.exception.code)
+                self.assertIn(PARENT_ID, repository.load_index().open)
+
     def test_archive_rejects_wrong_run_and_nonterminal_delivery(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             repository = make_repository(Path(temporary))
@@ -397,25 +540,33 @@ class WorkflowTests(unittest.TestCase):
         )
 
     def test_unclaimed_terminal_archive_requires_task_creator(self) -> None:
-        with tempfile.TemporaryDirectory() as temporary:
-            repository = make_repository(Path(temporary))
-            add_task(repository, PARENT_ID)
-            with patch(
-                "wuditask.workflow.fetch_delivery",
-                return_value=delivery("cancelled", ["bob"]),
+        cases = (
+            ("done", "verification_needed", ["Delivered and verified"]),
+            ("cancelled", "cancelled", []),
+        )
+        for outcome, delivery_state, evidence in cases:
+            with (
+                self.subTest(outcome=outcome),
+                tempfile.TemporaryDirectory() as temporary,
             ):
-                with self.assertRaises(WudiTaskError) as raised:
-                    archive_task(
-                        repository,
-                        OTHER_ACTOR,
-                        PARENT_ID,
-                        outcome="cancelled",
-                        result="No longer planned.",
-                        evidence=[],
-                        run_id=None,
-                    )
+                repository = make_repository(Path(temporary))
+                add_task(repository, PARENT_ID)
+                with patch(
+                    "wuditask.workflow.fetch_delivery",
+                    return_value=delivery(delivery_state, ["bob"]),
+                ):
+                    with self.assertRaises(WudiTaskError) as raised:
+                        archive_task(
+                            repository,
+                            OTHER_ACTOR,
+                            PARENT_ID,
+                            outcome=outcome,
+                            result="Terminal result.",
+                            evidence=evidence,
+                            run_id=None,
+                        )
 
-        self.assertEqual("archive_creator_required", raised.exception.code)
+                self.assertEqual("archive_creator_required", raised.exception.code)
 
 
 if __name__ == "__main__":

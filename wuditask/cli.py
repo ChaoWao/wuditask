@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 import sys
 from copy import deepcopy
@@ -956,7 +957,7 @@ def _coordinator(
 
 
 def _write_actor(args: argparse.Namespace, coordinator: GitCoordinator) -> Identity:
-    if args.actor and coordinator.distributed:
+    if coordinator.distributed and (args.actor or os.environ.get("WUDITASK_ACTOR")):
         raise WudiTaskError(
             "actor_override_local_only",
             "Remote mutations must use the authenticated gh login.",

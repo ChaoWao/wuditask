@@ -441,7 +441,7 @@ def archive_task(
             if isinstance(participant, dict)
         )
         creator_terminal_matches = (
-            outcome in {"failed", "cancelled"}
+            validated_run_id is None
             and participants == []
             and identity_matches(existing_archive.task.get("created_by"), actor)
         )
@@ -476,11 +476,11 @@ def archive_task(
         )
     active_agents = record.task["active_agents"]
     archive_run_id: str | None
-    if outcome == "done" or active_agents:
+    if active_agents:
         if validated_run_id is None:
             raise WudiTaskError(
                 "archive_run_id_required",
-                "Archiving done or a task with active agents requires the caller's run ID.",
+                "Archiving a task with active agents requires the caller's run ID.",
                 details={
                     "task_id": task_id,
                     "outcome": outcome,
@@ -525,7 +525,7 @@ def archive_task(
             details={"task_id": task_id, "delivery": delivery},
             exit_code=3,
         )
-    if outcome == "done" and not _delivery_owner(delivery, actor):
+    if outcome == "done" and active_agents and not _delivery_owner(delivery, actor):
         raise WudiTaskError(
             "delivery_owner_required",
             f"{actor.login} is not a live owner of task {task_id}.",

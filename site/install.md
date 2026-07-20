@@ -77,7 +77,7 @@ wuditask help
 4. 用 `$wuditask-execute` 启动 ready 任务的 agent；自动选择时先取 assigned-to-me 且 idle 的任务，再取 unowned 任务。
 5. 执行中和归档前再次用 `$wuditask-check` 查看统一的只读状态。
 6. 当前 agent 不再执行时，用 `$wuditask-release` 只停止 matching `run_id`；不会取消 GitHub assignment，也不会误停同一 login 后来启动的新 run。
-7. 验收完成后，用 `$wuditask-archive` 保存 done、failed 或 cancelled 结果和证据。done 和仍有 active agents 的终态归档必须传 matching `run_id`；没有 active agent 的 failed/cancelled 只允许 task creator 归档，并且必须省略 run ID。
+7. 验收完成后，用 `$wuditask-archive` 保存 done、failed 或 cancelled 结果和证据。存在 active agents 时，任何 outcome 都必须传 caller 的 matching `run_id`；没有 active agent 时，任何 outcome 都只允许 task creator 归档并且必须省略 run ID。无 run 的 done 仍要求 ready dependencies、GitHub 成功终态和具体 evidence。
 
 添加任务时，canonical source 按以下顺序选择：
 

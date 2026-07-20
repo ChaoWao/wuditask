@@ -19,7 +19,7 @@ WudiTask 把 GitHub 责任人与 Hub agent execution 分开。canonical Issue/PR
 
 ## 0. 建立 Hub 与 Pages
 
-Hub 是独立 Git 仓，根目录 `hub.json` 必须为 task schema 3 / tool API 4。
+Hub 是独立 Git 仓，根目录 `hub.json` 必须为 task schema 3 / tool API 5。
 默认分支保存 `data/open`、`data/archive` 和 `data/deletions`，只允许普通 push。
 Pages workflow 固定一个完整工具 commit SHA，用它 validate 并生成 snapshot
 schema v3；Pages 永远只读。
@@ -175,17 +175,16 @@ wuditask archive TASK_ID \
   --evidence "Merged PR: https://github.com/acme/api/pull/88"
 ```
 
-done 要求至少一条 evidence 与 matching active run。archive 的一个普通 Hub
-commit 移动文件、清空 active_agents，并在 completion 保存 outcome、result、
-evidence、completed_by 与所有 `{login,run_id}` participants。
+done 要求至少一条 evidence、dependencies ready 和 GitHub 成功终态。存在 active
+agents 时，调用者必须传自己的 matching `--run-id` 且仍是 live owner；archive
+保存全部 participants 并清空全集。没有 active agent 时，只有 authenticated
+`created_by` 可以显式归档任何匹配的终态 outcome，并且必须省略 `--run-id`；该
+路径的 participants 为空，也覆盖在 WudiTask execute 之外完成的交付。
 
 failed/cancelled 要求具体结果且不解除依赖；它们不受 dependency blocker 阻止，
-但必须对应 GitHub 明确终态。存在 active agents 时，调用者必须传自己的 matching
-`--run-id`，archive 会保存全部 participants 并清空全集。没有 active agent 时，
-只有 authenticated `created_by` 可以显式归档，并且必须省略 `--run-id`；旧 run
-ID 会被拒绝而不是忽略。该路径的 participants 为空，用于未认领或已经 release
-的终态任务。NOT_PLANNED 不能归档为 done。GitHub unavailable 时任何 outcome
-都 fail closed。
+但必须对应 GitHub 明确终态。旧 run ID 会被拒绝而不是忽略。NOT_PLANNED 不能
+归档为 done。GitHub unavailable 时任何 outcome 都 fail closed。每次 archive
+仍通过一个普通 Hub commit 原子移动文件、清空 active_agents 并保存 completion。
 
 ## 8. list、show 与 Pages
 

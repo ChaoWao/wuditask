@@ -35,7 +35,7 @@ wuditask tool repository/
   schemas/deletion-receipt.schema.json 公开删除回执 v2 契约
 
 wuditask-hub repository/
-  hub.json                           task schema v3 / tool API v4 契约
+  hub.json                           task schema v3 / tool API v5 契约
   data/open/<task-id>.json           未归档任务
   data/archive/<year>/<task-id>.json 正常任务的归档记录
   data/deletions/<receipt-id>.json   持久删除回执与 ID 保留
@@ -224,11 +224,12 @@ wuditask archive WDT-20260711T120000Z-A1B2C3 \
   --evidence "python3 -m unittest tests.test_upload: 12 tests passed"
 ```
 
-`done` 始终要求当前 active agent 的 matching `--run-id`。failed/cancelled 若仍有
-active agents，也要求调用者的 matching run 并在同一 archive commit 中清空全部
-active entries；若已经没有 active agent，则只有 task `created_by` 可以在 source
-明确终态后归档，并且必须省略 `--run-id`。旧 run ID 会被拒绝而不是忽略。这使
-未认领或已经 release 的取消/失败任务不会卡死，同时保留明确的 authenticated
+存在 active agents 时，任何 outcome 都要求调用者的 matching run，并在同一
+archive commit 中清空全部 active entries；active `done` 还要求调用者仍是 live
+owner。若已经没有 active agent，则所有 outcome 都必须省略 `--run-id`，且只有
+task `created_by` 可以归档，participants 为空。此时 `done` 仍要求 dependencies
+ready、GitHub 成功终态和至少一条 evidence。旧 run ID 会被拒绝而不是忽略。这也
+覆盖在 WudiTask execute 之外已经完成交付的任务，同时保留明确的 authenticated
 authority。
 
 只有用户明确指出 archived record 本身是误建、重复或测试数据时，才使用独立

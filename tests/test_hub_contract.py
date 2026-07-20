@@ -20,7 +20,7 @@ TASK_ID = "WDT-20260711T120007Z-888888"
 class HubContractTests(unittest.TestCase):
     def test_manifest_and_published_schemas_are_versioned_together(self) -> None:
         self.assertEqual(3, HUB_SCHEMA_VERSION)
-        self.assertEqual(4, TOOL_API_VERSION)
+        self.assertEqual(5, TOOL_API_VERSION)
         root = Path(__file__).parents[1]
         task_schema = json.loads((root / "schemas/task.schema.json").read_text())
         receipt_schema = json.loads(
@@ -30,7 +30,16 @@ class HubContractTests(unittest.TestCase):
         self.assertEqual(3, task_schema["properties"]["schema_version"]["const"])
         self.assertEqual(2, receipt_schema["properties"]["receipt_version"]["const"])
         self.assertEqual(3, hub_schema["properties"]["schema_version"]["const"])
-        self.assertEqual(4, hub_schema["properties"]["tool_api_version"]["const"])
+        self.assertEqual(5, hub_schema["properties"]["tool_api_version"]["const"])
+
+    def test_published_done_schema_allows_empty_participants_with_evidence(self) -> None:
+        root = Path(__file__).parents[1]
+        task_schema = json.loads((root / "schemas/task.schema.json").read_text())
+        done_requirements = task_schema["$defs"]["completion"]["allOf"][0]["then"][
+            "properties"
+        ]
+        self.assertEqual({"minItems": 1}, done_requirements["evidence"])
+        self.assertNotIn("participants", done_requirements)
 
     def test_dependency_readiness_uses_completion_evidence_not_acceptance_records(self) -> None:
         task = {
@@ -126,9 +135,10 @@ class HubContractTests(unittest.TestCase):
 
     def test_manifest_requires_exact_current_versions(self) -> None:
         invalid_manifests = (
-            {"schema_version": 2, "tool_api_version": 4},
+            {"schema_version": 2, "tool_api_version": 5},
             {"schema_version": 3, "tool_api_version": 3},
-            {"schema_version": 3, "tool_api_version": 4, "legacy_mode": True},
+            {"schema_version": 3, "tool_api_version": 4},
+            {"schema_version": 3, "tool_api_version": 5, "legacy_mode": True},
             {},
         )
         for manifest in invalid_manifests:

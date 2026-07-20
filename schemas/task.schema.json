@@ -127,8 +127,7 @@
           "if": {"properties": {"outcome": {"const": "done"}}},
           "then": {
             "properties": {
-              "evidence": {"minItems": 1},
-              "participants": {"minItems": 1}
+              "evidence": {"minItems": 1}
             }
           }
         }

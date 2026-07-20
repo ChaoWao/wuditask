@@ -777,6 +777,71 @@ class CliTests(unittest.TestCase):
             task = TaskRepository(seed).load_index().archived[TASK_A].task
             self.assertEqual([], task["completion"]["participants"])
 
+    def test_remote_unclaimed_done_archive_needs_no_run_id(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            base = Path(temporary)
+            github = FakeGitHub(base)
+            github.issue(12, state="CLOSED", state_reason="COMPLETED")
+            _, seed, environment = self.configure_remote(base, github)
+            repository = TaskRepository(seed)
+            self.seed_task(repository, TASK_A, number=12)
+            self.publish_seed(seed)
+
+            archived = self.run_remote(
+                environment,
+                "archive",
+                TASK_A,
+                "--outcome",
+                "done",
+                "--result",
+                "Delivered outside an active WudiTask run.",
+                "--evidence",
+                "Merged pull request and checks passed.",
+            )
+
+            self.assertEqual(0, archived.returncode, archived.stdout + archived.stderr)
+            payload = json.loads(archived.stdout)
+            self.assertIsNone(payload["run_id"])
+            self.assertTrue(payload["confirmed"])
+            self.assertTrue(payload["sync"]["confirmed"])
+            git(["pull", "--ff-only"], seed)
+            task = TaskRepository(seed).load_index().archived[TASK_A].task
+            self.assertEqual("done", task["completion"]["outcome"])
+            self.assertEqual(
+                ["Merged pull request and checks passed."],
+                task["completion"]["evidence"],
+            )
+            self.assertEqual([], task["completion"]["participants"])
+
+    def test_remote_mutation_rejects_environment_actor_override(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            base = Path(temporary)
+            github = FakeGitHub(base, login="bob")
+            github.issue(12, state="CLOSED", state_reason="COMPLETED")
+            _, seed, environment = self.configure_remote(base, github)
+            repository = TaskRepository(seed)
+            self.seed_task(repository, TASK_A, number=12)
+            self.publish_seed(seed)
+            environment["WUDITASK_ACTOR"] = "alice"
+
+            archived = self.run_remote(
+                environment,
+                "archive",
+                TASK_A,
+                "--outcome",
+                "done",
+                "--result",
+                "Delivered.",
+                "--evidence",
+                "Checks passed.",
+            )
+
+            self.assertEqual(2, archived.returncode, archived.stdout + archived.stderr)
+            payload = json.loads(archived.stdout)
+            self.assertEqual("actor_override_local_only", payload["error"]["code"])
+            git(["pull", "--ff-only"], seed)
+            self.assertIn(TASK_A, TaskRepository(seed).load_index().open)
+
     def test_old_dep_check_and_reconcile_parsers_do_not_exist(self) -> None:
         for command in ("dep-check", "reconcile"):
             with self.subTest(command=command):
@@ -918,7 +983,7 @@ class CliTests(unittest.TestCase):
             text=True,
         )
         self.assertEqual(0, version.returncode, version.stderr)
-        self.assertEqual("wuditask 0.7.0", version.stdout.strip())
+        self.assertEqual("wuditask 0.8.0", version.stdout.strip())
 
 
 if __name__ == "__main__":

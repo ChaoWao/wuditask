@@ -7,6 +7,6 @@
   "required": ["schema_version", "tool_api_version"],
   "properties": {
     "schema_version": {"const": 3},
-    "tool_api_version": {"const": 4}
+    "tool_api_version": {"const": 5}
   }
 }

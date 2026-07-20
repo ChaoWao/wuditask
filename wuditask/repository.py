@@ -18,7 +18,7 @@ from .util import (
 
 
 HUB_SCHEMA_VERSION = 3
-TOOL_API_VERSION = 4
+TOOL_API_VERSION = 5
 
 
 @dataclass(frozen=True)

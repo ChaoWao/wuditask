@@ -6,13 +6,14 @@
 ```json
 {
   "schema_version": 3,
-  "tool_api_version": 4
+  "tool_api_version": 5
 }
 ```
 
-v3 是无兼容切换：工具不读取 v1/v2 task，不接受旧 `claim`、text source 或
-重复 narrative 字段。升级必须在同一个 Hub commit 中迁移 manifest、全部 open
-和 archive task，并固定兼容的新工具 commit。
+v3/API5 是无兼容切换：工具不读取 v1/v2 task，不接受旧 `claim`、text source 或
+重复 narrative 字段。API5 允许 creator-only、无 active-agent 的成功归档，但不
+改变 task v3 字段；升级必须在同一个 Hub commit 中更新 manifest 并固定兼容的
+新工具 commit。旧工具必须先 selfupdate 才能读取这种新 archive。
 
 ## 两个事实源
 
@@ -182,12 +183,13 @@ Archive 原子清空 `active_agents`，并新增：
 }
 ```
 
-`done` 的 `completed_by` 必须是 participants 中自己的 matching `run_id`。对
-`failed`/`cancelled`，只要归档前存在 active agents，也使用同一规则，并把当时
-全部 active entries 保存到 participants 后清空全集。若归档前没有 active agent，
-participants 可以为空，但 `completed_by` 必须等于 task `created_by`，且 CLI
-必须省略 `--run-id`；旧 run ID 会被拒绝而不是忽略。这个 creator-only 终态路径
-覆盖未认领或已经 release 的工作。
+若归档前存在 active agents，任何 outcome 的 `completed_by` 都必须通过自己的
+matching `run_id` 授权，并把当时全部 active entries 保存到 participants 后清空
+全集；active `done` 还要求 caller 是 live owner。若归档前没有 active agent，
+participants 必须为空、`completed_by` 必须等于 task `created_by`，且 CLI 必须
+省略 `--run-id`。此 creator-only 路径覆盖在 WudiTask execute 外完成的成功交付、
+未认领任务和已经 release 的工作；`done` 仍要求 evidence、ready dependencies 与
+GitHub 成功终态。旧 run ID 会被拒绝而不是忽略。
 
 `done` 解除下游依赖；`failed` 与 `cancelled` 永不解除。Issue
 `CLOSED/NOT_PLANNED` 只能对应 cancelled；nonterminal 或 unavailable delivery

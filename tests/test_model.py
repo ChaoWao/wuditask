@@ -79,7 +79,7 @@ class ModelTests(unittest.TestCase):
             issues,
         )
 
-    def test_done_completion_requires_evidence_and_snapshots_participants(self) -> None:
+    def test_done_completion_requires_evidence(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             task = add_task(make_repository(Path(temporary)), TASK_ID)
         task["completion"] = {
@@ -135,7 +135,29 @@ class ModelTests(unittest.TestCase):
         self.assertIn(
             {
                 "path": "$.completion.completed_by",
-                "message": "must identify a participant or the task creator for a non-done outcome",
+                "message": "must identify a participant or the task creator when participants are empty",
+            },
+            validate_task(task, archived=True),
+        )
+
+    def test_unclaimed_done_completion_may_be_recorded_by_creator(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            task = add_task(make_repository(Path(temporary)), TASK_ID)
+        task["completion"] = {
+            "outcome": "done",
+            "completed_at": "2026-07-11T13:00:00Z",
+            "completed_by": "alice",
+            "result": "Delivered outside an active WudiTask run.",
+            "evidence": ["Merged pull request and checks passed"],
+            "participants": [],
+        }
+        self.assertEqual([], validate_task(task, archived=True))
+
+        task["completion"]["completed_by"] = "bob"
+        self.assertIn(
+            {
+                "path": "$.completion.completed_by",
+                "message": "must identify a participant or the task creator when participants are empty",
             },
             validate_task(task, archived=True),
         )
