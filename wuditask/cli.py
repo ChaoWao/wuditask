@@ -21,6 +21,8 @@ from .model import Identity
 from .repository import TaskIndex, TaskRecord, TaskRepository
 from .selfupdate import self_update
 from .site_builder import build_site
+from .business_site import build_business_site
+from .github_graph import GraphScope
 from .util import (
     TASK_ID_RE,
     new_run_id,
@@ -148,6 +150,7 @@ def _parser() -> argparse.ArgumentParser:
     commands.add_parser("validate", help="Validate Hub data and dependencies.")
     site = commands.add_parser("build-site", help="Build the GitHub Pages artifact.")
     site.add_argument("--output", type=Path, default=Path("_site"))
+    site.add_argument("--github-scope", type=Path, help="Read GitHub roots and native relations directly; no Hub installation required.")
 
     install = commands.add_parser("install", help="Register tool and Hub remotes.")
     install.add_argument("--home", type=Path)
@@ -989,6 +992,9 @@ def run(args: argparse.Namespace, tool_root: Path) -> dict[str, Any]:
             home=args.home,
             replace=args.replace,
         )
+
+    if args.command == "build-site" and args.github_scope is not None:
+        return build_business_site(GraphScope.read(args.github_scope), source=tool_root / "site", output=args.output)
 
     coordinator, hub_repo = _coordinator(args, tool_root)
     if args.command in {"execute", "release", "archive", "delete"} and not coordinator.distributed:

@@ -1,5 +1,10 @@
 # WudiTask 数据格式 v3
 
+> 本文描述存量 Hub 执行协议。新增的 [GitHub 业务图](github-business-graph.md)
+> 直接读取 GitHub 原生关系，不使用 Hub priority、dependencies 或 archive 解锁。
+> 个人执行数据的协议迁移尚未进行。
+
+
 任务与删除回执的机器契约分别位于 `schemas/task.schema.json` 和
 `schemas/deletion-receipt.schema.json`。Hub 必须精确声明：
 

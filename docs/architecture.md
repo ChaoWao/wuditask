@@ -1,5 +1,10 @@
 # 架构与并发模型
 
+> 本文描述存量 Hub 执行协议。新增的 [GitHub 业务图](github-business-graph.md)
+> 直接读取 GitHub 原生关系，不使用 Hub priority、dependencies 或 archive 解锁。
+> 个人执行数据的协议迁移尚未进行。
+
+
 ## 目标
 
 WudiTask 用 GitHub Issue/PR 承载业务合同，用独立 Git Hub 承载跨仓依赖、多个

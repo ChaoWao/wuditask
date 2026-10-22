@@ -1,5 +1,10 @@
 # 分布式协作工作流
 
+> 本文描述存量 Hub 执行协议。新增的 [GitHub 业务图](github-business-graph.md)
+> 直接读取 GitHub 原生关系，不使用 Hub priority、dependencies 或 archive 解锁。
+> 个人执行数据的协议迁移尚未进行。
+
+
 WudiTask 把 GitHub 责任人与 Hub agent execution 分开。canonical Issue/PR 是
 任务合同；Hub 只保存 priority、跨仓依赖、active runs 与归档结果。
 

@@ -1,0 +1,127 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <meta name="color-scheme" content="light" />
+    <title>GitHub 工作总览 · WudiTask</title>
+    <link rel="stylesheet" href="github.css" />
+  </head>
+  <body>
+    <a class="skip" href="#main">跳到工作图</a>
+    <header>
+      <div class="brand">
+        <span class="mark" aria-hidden="true">W</span>
+        <div><strong>WudiTask</strong><span>GitHub 工作总览</span></div>
+      </div>
+      <nav aria-label="视图">
+        <a href="index.html" aria-current="page">业务图</a
+        ><span title="个人协调与内部执行尚未接入">执行与计划 · 未接入</span>
+      </nav>
+      <button id="refresh" type="button">重新读取快照</button>
+    </header>
+    <main id="main">
+      <section class="intro">
+        <div>
+          <p class="eyebrow">GITHUB IS THE SOURCE</p>
+          <h1>看清目标、交付与阻塞</h1>
+          <p>
+            业务进展来自 Issue / PR。包含关系不代表阻塞，PR
+            合入不代表整个目标已验收。
+          </p>
+        </div>
+        <div id="metrics" class="metrics" aria-live="polite"></div>
+      </section>
+      <section class="health" aria-label="同步状态">
+        <strong id="health" role="status">正在读取快照…</strong
+        ><span id="time"></span>
+        <p>
+          这是只读快照。刷新按钮读取最近发布的内容；GitHub 变更由采集 workflow
+          同步。页面不授予执行权。
+        </p>
+      </section>
+      <div class="toolbar">
+        <label
+          >关系视图<select id="relation">
+            <option value="contains">目标拆分</option>
+            <option value="blocks">阻塞依赖</option>
+            <option value="delivers">PR 交付</option>
+          </select></label
+        >
+        <label
+          >仓库<select id="repo">
+            <option value="">全部仓库</option>
+          </select></label
+        >
+        <label
+          >负责人<select id="owner">
+            <option value="">全部负责人</option>
+          </select></label
+        >
+        <label
+          >业务状态<select id="state">
+            <option value="">全部状态</option>
+            <option value="open">Open</option>
+            <option value="closed">Closed</option>
+            <option value="merged">Merged</option>
+            <option value="unknown">未知 / 受限</option>
+          </select></label
+        >
+        <label class="search"
+          >查找<input
+            id="search"
+            type="search"
+            placeholder="标题 / 仓库 / 编号"
+        /></label>
+        <button id="reset" type="button">清除聚焦</button>
+      </div>
+      <p id="caption" class="muted"></p>
+      <div class="workspace">
+        <section class="canvas-panel" aria-label="关系图">
+          <div class="zoom">
+            <button id="zoom-out" aria-label="缩小">−</button
+            ><button id="zoom-in" aria-label="放大">＋</button
+            ><button id="zoom-fit">适应宽度</button>
+          </div>
+          <div id="graph" tabindex="0" aria-label="可滚动关系图"></div>
+        </section>
+        <aside id="details" aria-live="polite">
+          <h2>选择一个任务</h2>
+          <p>点击节点或表格中的任务，查看负责人、前置条件、PR 检查和来源。</p>
+        </aside>
+      </div>
+      <details open class="table-panel">
+        <summary>任务表 · 图的等价阅读入口</summary>
+        <div class="table-scroll">
+          <table>
+            <thead>
+              <tr>
+                <th>任务</th>
+                <th>负责人</th>
+                <th>业务状态</th>
+                <th>前置条件</th>
+              </tr>
+            </thead>
+            <tbody id="rows"></tbody>
+          </table>
+        </div>
+      </details>
+      <details class="diagnostics">
+        <summary id="diagnostics-label">采集诊断</summary>
+        <ul id="diagnostics"></ul>
+      </details>
+      <noscript
+        ><p>
+          交互图需要 JavaScript；<a href="graph.json"
+            >下载带来源和时间的 JSON 快照</a
+          >，或回 GitHub 查看任务。
+        </p></noscript
+      >
+    </main>
+    <footer>
+      WudiTask · 业务事实由 GitHub 维护 · 无需 WDT 登记或二次归档
+      <a href="graph.json">原始快照</a>
+    </footer>
+    <script src="github.js"></script>
+  </body>
+</html>

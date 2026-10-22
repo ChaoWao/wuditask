@@ -1,9 +1,27 @@
 # WudiTask
 
-WudiTask 是供人类与 AI agent 共同使用的分布式任务队列。canonical GitHub
-Issue/PR 保存任务叙述、验收要求、owners 与交付进展；独立 Task Hub 只补充
-跨仓依赖、当前 agent runs 和归档证据。它没有常驻服务器、数据库或包管理器
-依赖。
+WudiTask 提供 GitHub 业务 DAG，并保留供存量使用的 agent 执行队列。
+Issue/PR 保存任务目标、责任、验收和业务关系；新业务图直接读取这些来源。
+旧 Hub 执行数据尚待迁移，业务总览不依赖其任务登记或归档。
+工具运行不需要常驻服务器、数据库或额外 Python 包。
+
+## GitHub 业务 DAG（无需 Hub 任务登记）
+
+业务总览直接从 GitHub 根 Issue 及其原生关系生成，使用现有 WudiTask Pages：
+
+```bash
+python3 tools/wuditask.py --json build-site \
+  --github-scope examples/github-scope.json --output _site
+python3 -m http.server 8000 --directory _site
+```
+
+目标拆分、阻塞依赖和 PR 交付分开显示；支持跨仓、负责人筛选、来源与当前 head
+检查、未知/过期/依赖环提示。前置满足不等待 Hub archive。完整部署、隐私边界和
+验收方法见 [GitHub 业务图](docs/github-business-graph.md)。
+
+**执行协议迁移尚未进行。** 下文 Hub task / priority / dependencies / archive
+描述现有旧执行流程，供存量用户维护使用；新的业务图不依赖这些记录，也不宣称
+旧流程已满足新的同用户跨环境协调设计。现有活动任务不会在图改造时被删除。
 
 ## 系统边界
 
@@ -257,7 +275,9 @@ Pages artifact，因此不是敏感信息擦除工具。
 
 所有命令都支持全局 `--json`，skills 始终使用 JSON 输出。完整协议见 [docs/workflow.md](docs/workflow.md)。
 
-## GitHub Pages
+## GitHub Pages（存量执行看板）
+
+新的业务图部署入口见 [GitHub 业务图](docs/github-business-graph.md)，以下描述未传 scope 的旧构建模式。
 
 Pages workflow 位于 Hub 仓。它 checkout Hub，再 checkout workflow 中固定的
 WudiTask 完整 commit SHA，使用工具仓的 validator 与 `site/` 构建

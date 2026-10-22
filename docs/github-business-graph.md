@@ -1,0 +1,114 @@
+# GitHub 业务图
+
+`build-site --github-scope` 直接从 GitHub 总 Issue 读取业务图，不需要安装配置、
+Hub task、`add` 或 `archive`。GitHub 的关闭原因与原生关系决定图中的前置状态。
+该模式不修改 GitHub，也不读取旧 Hub 执行记录。
+
+## 本地生成
+
+需要 Python 3.10+、已认证的 `gh` 和对所选公开仓库的读取权限：
+
+```bash
+python3 tools/wuditask.py --json build-site \
+  --github-scope examples/github-scope.json --output _site
+python3 -m http.server 8000 --directory _site
+```
+
+在浏览器打开 `http://localhost:8000`。必须通过 HTTP 查看交互图；`file://` 下浏览器
+通常不允许脚本 fetch JSON。`graph.json` 可单独下载阅读。
+
+配置文件只声明展示范围，不是逐任务登记：
+
+```json
+{
+  "roots": ["https://github.com/hw-native-sys/simpler/issues/2670"],
+  "max_nodes": 500,
+  "max_pages": 20,
+  "stale_after_seconds": 10800
+}
+```
+
+支持 github.com Issue/PR URL 根节点。递归展开原生子 Issue、blocked-by 前置与
+正式交付 PR；不解析正文中的普通链接来猜依赖。多个根允许跨仓展示。
+Project、任意仓库搜索、Enterprise host 和私有业务图尚未支持。
+
+`max_nodes`、`max_pages` 是采集上限；达到上限显示 partial/unknown，不能伪装完整。
+每次调用重新读取，包括 closed 对象；不靠旧 Hub archive 判断完成。
+API 分页完整读取，网络/权限/GraphQL 部分错误按字段暴露，错误消息不原样发布。
+每个对象采集后重读更新时间和 PR head，发生变化时标记不稳定；这不是全局事务快照。
+来源稳定 node ID 去重；URL 重定向后核实当前身份。跨转移发生 node ID 变化时不猜测
+两个对象相同。页面只读，不从身份推导执行领取权。
+
+## 视图与状态
+
+- **目标拆分**：父目标 → 子 Issue，表示包含，不产生执行阻塞。
+- **阻塞依赖**：前置 Issue → 后续 Issue；只在这个子图检测依赖环。
+- **PR 交付**：PR → Issue，允许一对多、多对一，不把所有关联目标合并。
+- 按仓库、负责人、状态、标题筛选；保留被筛掉的上游边界。可聚焦前置或后继，
+  缩放、滚动图；任务表提供等价的键盘入口。
+- Issue 的唯一 assignee 是可解析负责人；零或多个分别显示 unassigned/conflict，
+  不从 PR 作者静默推断 Issue owner。PR 同样展示 assignees，不自动改派。
+- PR 详情包含观察到的 head SHA、审查结论和该提交的 check/status 统计；不把
+  “所有 checks 成功”当作仓库分支保护全部满足，也不宣称自动可合入。
+
+| 状态 | 含义 |
+| --- | --- |
+| satisfied | 已记录的前置均 closed/completed，相关观察无错误；不是开工授权 |
+| unrecorded | 没读到前置关系；不声称没有遗漏的前置 |
+| blocked | 有前置 Issue 仍 open |
+| needs_assessment | 前置取消或关闭原因不明确，需在 GitHub 核定 |
+| unknown | 读取失败、受限、截断或对象在采集中变化 |
+| invalid | 存在依赖环或受环影响 |
+
+PR merged + Issue open 仍显示目标未完成。某次 agent 成功/失败、旧 Hub archive
+均不改变业务图的判断。当前执行与内部计划显示“未接入”，不能解释为无人执行。
+
+## 在现有 Hub Pages 部署
+
+不建立第三个网站。Hub 保留配置/部署职责，工具实现留在 WudiTask。
+将 scope 保存为 Hub 根目录 `github-view.json`，Pages workflow 使用：
+
+```bash
+python3 tool/tools/wuditask.py --json build-site \
+  --github-scope hub/github-view.json --output "$GITHUB_WORKSPACE/_site"
+```
+
+工具 checkout 必须固定到包含此功能的完整 commit SHA。沿用 Hub 的小时级 schedule、
+手动触发和 Pages 发布串行组；push paths 加入 `github-view.json`。
+业务仓的 Issue 事件不会直接触发另一个 Hub 仓的 workflow，定时采集负责补齐。
+构建不需要先 validate 旧任务表；执行台账的维护和检查可另行保留。
+
+所有根都不可读时命令失败，不替换本地上一份输出；Actions 应停止发布，现有 Pages
+仍保留上次部署，浏览器会根据数据年龄标旧。有可读根但部分字段失败时发布明确的
+partial 图并返回 `status=partial`。workflow 应在 job summary 给出诊断；不得把
+构建进程成功等同采集完整。页面刷新只读取最新已部署快照，不在浏览器使用 GitHub token。
+
+本地输出使用暂存目录，完成后切换；要求单发布者。输出目录须带本模式标记且只含
+本站产物，拒绝覆盖非本站目录或旧 dashboard。CI artifact 使用独立目录再由 Pages
+整体部署，因此不会把旧业务数据混入新生成物。
+
+公开 Pages 只读取已核实为 public 的仓。私有或无法核实可见性的引用显示匿名边界，
+不发布其 URL、标题、owner 或正文。快照也不包含 Issue body、评论、token、机器路径
+或旧执行回执。源仓私有不等于 Pages 私有；私人执行详情必须采用独立受控存储/视图。
+
+## 迁移边界
+
+旧的 `build-site`（未传 scope）和 execute/archive 等命令暂时维持原协议，供现存
+执行台账继续使用，不能当作新的个人协调模型。新业务图不调用它们，也不把它们
+嵌入公开页面。后续迁移执行状态前，需要盘点旧数据、确认活动 run 收尾，并确保
+同用户全部环境切到单一权威；本次不删除或改写旧记录。
+
+## 验证
+
+```bash
+python3 -m unittest tests.test_github_graph -v
+python3 -m unittest discover -s tests -v
+node --check site/github.js
+```
+
+覆盖跨仓关系、分页/截断、失败读取、取消与重开、依赖环及下游、身份重定向、
+public/private 边界、更新中的 PR、无 Hub 配置构建、旧产物保全和前端模型。
+真实采集结果和浏览器检查须另外记录，单元测试不替代生产部署验收。
+
+API 依据：[子 Issue](https://docs.github.com/en/rest/issues/sub-issues)、
+[Issue dependencies](https://docs.github.com/en/rest/issues/issue-dependencies)。
