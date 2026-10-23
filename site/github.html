@@ -14,31 +14,14 @@
         <span class="mark" aria-hidden="true">W</span>
         <div><strong>WudiTask</strong><span>GitHub 工作总览</span></div>
       </div>
-      <nav aria-label="视图">
-        <a href="index.html" aria-current="page">业务图</a
-        ><span title="个人协调与内部执行尚未接入">执行与计划 · 未接入</span>
-      </nav>
-      <button id="refresh" type="button">重新读取快照</button>
+      <button id="refresh" type="button" title="读取最近发布的快照">
+        刷新
+      </button>
     </header>
     <main id="main">
-      <section class="intro">
-        <div>
-          <p class="eyebrow">GITHUB IS THE SOURCE</p>
-          <h1>看清目标、交付与阻塞</h1>
-          <p>
-            业务进展来自 Issue / PR。包含关系不代表阻塞，PR
-            合入不代表整个目标已验收。
-          </p>
-        </div>
-        <div id="metrics" class="metrics" aria-live="polite"></div>
-      </section>
       <section class="health" aria-label="同步状态">
-        <strong id="health" role="status">正在读取快照…</strong
+        <strong id="health" role="status">正在读取…</strong
         ><span id="time"></span>
-        <p>
-          这是只读快照。刷新按钮读取最近发布的内容；GitHub 变更由采集 workflow
-          同步。页面不授予执行权。
-        </p>
       </section>
       <div class="toolbar">
         <label
@@ -59,8 +42,8 @@
           </select></label
         >
         <label
-          >业务状态<select id="state">
-            <option value="active" selected>未完成（默认）</option>
+          >状态<select id="state">
+            <option value="active" selected>未完成</option>
             <option value="">全部状态</option>
             <option value="open">Open</option>
             <option value="closed">Closed</option>
@@ -96,8 +79,8 @@
           <p>点击节点或表格中的任务，查看目标、当前进展、剩余工作和下一步。</p>
         </aside>
       </div>
-      <details open class="table-panel">
-        <summary>任务表 · 图的等价阅读入口</summary>
+      <details class="table-panel">
+        <summary>列表查看</summary>
         <div class="table-scroll">
           <table>
             <thead>
@@ -125,8 +108,8 @@
       >
     </main>
     <footer>
-      WudiTask · 业务事实由 GitHub 维护 · 无需 WDT 登记或二次归档
-      <a href="graph.json">原始快照</a>
+      进展来自 GitHub
+      <a href="graph.json">数据</a>
     </footer>
     <div id="node-summary" class="node-summary" role="tooltip" hidden></div>
     <script src="github.js"></script>

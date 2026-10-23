@@ -80,10 +80,15 @@
     if (focus) for (const id of ids) if (!focus.has(id)) ids.delete(id);
     if (options.state === "active")
       for (const n of data.nodes) if (isTerminal(n)) ids.delete(n.id);
+    const visibleEdges = edges.filter((e) => ids.has(e.from) && ids.has(e.to));
+    if (options.kind !== "contains") {
+      const connected = new Set(visibleEdges.flatMap((e) => [e.from, e.to]));
+      for (const id of ids) if (!connected.has(id)) ids.delete(id);
+    }
     return {
       nodes: data.nodes.filter((n) => ids.has(n.id)),
-      edges: edges.filter((e) => ids.has(e.from) && ids.has(e.to)),
-      primary,
+      edges: visibleEdges,
+      primary: new Set([...primary].filter((id) => ids.has(id))),
     };
   }
   function childIds(data, id) {
@@ -137,22 +142,32 @@
       label(n),
       n.title,
       "负责人：" + ((n.assignees || []).join(", ") || "未指派 / 未知"),
-      "状态：" + businessState(n),
-      "前置：" + (prerequisiteLabels[n.prerequisites] || "未知"),
     ];
-    if (n.kind === "issue") {
+    for (const [key, title] of [
+      ["goal", "目标"],
+      ["progress", "进展"],
+      ["next", "下一步"],
+    ]) {
+      const section = n.summary?.[key];
+      if (section?.items?.length) {
+        const value = section.items[0];
+        lines.push(
+          title + "：" + value.slice(0, 160) + (value.length > 160 ? "…" : ""),
+        );
+      }
+    }
+    if (
+      ["blocked", "unknown", "invalid", "needs_assessment"].includes(
+        n.prerequisites,
+      )
+    )
+      lines.push("前置：" + prerequisiteLabels[n.prerequisites]);
+    if (n.kind === "issue" && ids.size) {
       lines.push(
         `直接子项：${completed} / ${ids.size} 已完成` +
           (n.relations_complete?.contains === true
             ? "（已采集）"
             : "（关系未完整核实）"),
-      );
-      const prs = data.edges.filter(
-        (e) => e.kind === "delivers" && e.to === n.id,
-      );
-      lines.push(
-        `关联交付 PR：${prs.length}` +
-          (n.relations_complete?.delivers === true ? "" : "（关系未完整核实）"),
       );
     }
     if (n.kind === "pr") {
@@ -165,7 +180,6 @@
       );
     }
     if (n.errors?.length) lines.push("注意：存在采集错误，详情见右侧");
-    lines.push("来源更新：" + (n.updated_at || "未知"));
     return lines;
   }
   function layout(nodes, edges) {
@@ -320,16 +334,16 @@
     $("health").textContent = refreshFailed
       ? "刷新失败 · 仍显示上次快照"
       : status === "stale"
-        ? "快照已过期 · 不用于开工判断"
+        ? "数据已过期"
         : status === "partial"
           ? "部分采集 · 存在未知或受限信息"
-          : "本轮采集完整 · 业务状态以 GitHub 为准";
+          : "已同步";
     $("health").parentElement.classList.toggle(
       "warning",
       refreshFailed || status !== "complete",
     );
     $("time").textContent =
-      "观察区间：" + data.observation_started_at + " — " + data.generated_at;
+      "更新于 " + new Date(data.generated_at).toLocaleString();
   }
   function fillFilter(id, values) {
     const select = $(id),
@@ -389,21 +403,7 @@
           el("small", "部分摘录，完整内容见原 Issue / PR。", "muted"),
         );
     }
-    const missing = [
-      ["progress", "当前进展"],
-      ["remaining", "剩余工作 / 阻塞"],
-      ["next", "下一步"],
-    ]
-      .filter(([key]) => !summary[key]?.items?.length)
-      .map(([, title]) => title);
-    if (!hasSummary)
-      core.append(
-        el("p", "正文尚无可提取的核心总结，请打开原 Issue / PR 查看。"),
-      );
-    else if (missing.length)
-      core.append(
-        el("p", "正文未明确列出：" + missing.join("、") + "。", "muted"),
-      );
+    if (!hasSummary) core.append(el("p", "暂无摘要，可打开 GitHub 查看详情。"));
     panel.append(core);
     const source = el("details", undefined, "source-details");
     source.append(el("summary", "来源详情与关联任务"));
@@ -412,11 +412,9 @@
     const fields = [
       ["业务状态", businessState(n)],
       ["负责人", (n.assignees || []).join(", ") || "未指派"],
-      ["责任解析", n.owner_resolution || "未知"],
       ["前置条件", prerequisiteLabels[n.prerequisites] || "未知"],
       ["来源更新时间", n.updated_at || "未知"],
       ["本次观察时间", n.observed_at || "未知"],
-      ["执行状态", "未接入个人协调；不表示无人执行"],
     ];
     if (n.kind === "pr") {
       fields.push(["观察到的 head", n.head_sha], ["审查", n.review_decision]);
@@ -504,18 +502,20 @@
       ? "筛选 / 聚焦时自动展开匹配路径；清除后恢复折叠状态。"
       : "点击 ＋ / − 展开收起；悬停或键盘聚焦查看摘要。";
     $("caption").textContent =
-      names[options.kind] +
-      ` · ${view.primary.size} 个匹配任务，${view.nodes.length - view.primary.size} 个前置边界，${view.edges.length} 条关系` +
-      (options.state === "active"
-        ? " · 已隐藏 Closed / Merged，历史关系见详情"
-        : "") +
-      (folding
-        ? ` · 已收起 ${filtered.nodes.length - view.nodes.length} 个节点`
-        : "") +
-      (diagram.unresolved.size ? " · 有环或受环影响的节点，不能视为 DAG" : "");
+      `${view.nodes.length} 个任务 · ${view.edges.length} 条关系` +
+      (diagram.unresolved.size ? " · 存在依赖环" : "");
+    $("reset").hidden = !focus;
     if (!view.nodes.length) {
       canvas.append(
-        el("p", "该筛选范围没有节点。清除筛选或检查采集诊断。", "empty"),
+        el(
+          "p",
+          options.kind === "blocks"
+            ? "当前范围没有已记录的阻塞关系。"
+            : options.kind === "delivers"
+              ? "当前范围没有交付关联。"
+              : "没有匹配的任务。",
+          "empty",
+        ),
       );
       drawing = null;
     } else {
@@ -580,8 +580,11 @@
             { x: 13, y: 84, class: "meta" },
             trim(
               businessState(n) +
-                " · " +
-                (prerequisiteLabels[n.prerequisites] || "未知"),
+                (["blocked", "unknown", "invalid", "needs_assessment"].includes(
+                  n.prerequisites,
+                )
+                  ? " · " + prerequisiteLabels[n.prerequisites]
+                  : ""),
               38,
             ),
           ),
@@ -685,19 +688,9 @@
         "owner",
         data.nodes.flatMap((n) => n.assignees || []),
       );
-      const metrics = $("metrics");
-      metrics.replaceChildren();
-      [
-        [data.nodes.filter((n) => n.kind === "issue").length, "Issues"],
-        [data.nodes.filter((n) => n.kind === "pr").length, "交付 PR"],
-        [data.edges.length, "原生关系"],
-      ].forEach(([count, title]) => {
-        const card = el("div", undefined, "metric");
-        card.append(el("strong", count), el("span", title));
-        metrics.append(card);
-      });
       $("diagnostics-label").textContent =
         `采集诊断 · ${data.diagnostics.length} 项`;
+      $("diagnostics").closest("details").hidden = !data.diagnostics.length;
       $("diagnostics").replaceChildren();
       data.diagnostics.forEach((d) =>
         $("diagnostics").append(

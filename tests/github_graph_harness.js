@@ -176,7 +176,7 @@ const activeData = {
     { from: "merged", to: "open", kind: "delivers" },
   ],
 };
-for (const kind of ["contains", "blocks", "delivers"]) {
+for (const kind of ["contains", "blocks"]) {
   const active = model.selectGraph(activeData, { kind, state: "active" });
   assert.deepEqual(
     active.nodes.map((n) => n.id),
@@ -191,8 +191,31 @@ for (const kind of ["contains", "blocks", "delivers"]) {
 }
 assert.equal(
   model.selectGraph(activeData, { kind: "blocks", state: "" }).nodes.length,
-  5,
+  3,
 );
 console.log(
   "Active view hides terminal boundaries, retains open descendants and unknowns, and permits history.",
+);
+
+// Relationship views omit unrelated tasks and pairs removed by the active filter.
+const unrelated = { id: "unrelated", kind: "issue", state: "open" };
+const sparse = { ...activeData, nodes: [...activeData.nodes, unrelated] };
+assert.deepEqual(
+  model
+    .selectGraph(sparse, { kind: "blocks", state: "active" })
+    .nodes.map((n) => n.id),
+  ["open", "unknown"],
+);
+assert.deepEqual(
+  model.selectGraph(sparse, { kind: "delivers", state: "active" }).nodes,
+  [],
+);
+assert.equal(
+  model.selectGraph(sparse, { kind: "delivers", state: "" }).edges.length,
+  1,
+);
+assert.ok(
+  model
+    .selectGraph(sparse, { kind: "contains", state: "active" })
+    .nodes.some((n) => n.id === "unrelated"),
 );

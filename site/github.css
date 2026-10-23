@@ -64,7 +64,7 @@ header {
   align-items: center;
   justify-content: space-between;
   gap: 20px;
-  padding: 18px 4vw;
+  padding: 12px 4vw;
   background: white;
   border-bottom: 1px solid var(--line);
 }
@@ -89,67 +89,16 @@ header {
   font-size: 12px;
   color: var(--muted);
 }
-nav {
-  display: flex;
-  gap: 24px;
-  align-items: center;
-}
-nav span {
-  color: var(--muted);
-  font-size: 13px;
-}
-nav a {
-  text-decoration: none;
-  font-weight: 650;
-}
 main {
   max-width: 1900px;
   margin: auto;
-  padding: 30px 4vw;
-}
-.intro {
-  display: flex;
-  justify-content: space-between;
-  gap: 24px;
-  align-items: center;
-  margin-bottom: 22px;
-}
-h1 {
-  font-size: clamp(24px, 2.6vw, 36px);
-  margin: 5px 0;
+  padding: 18px 4vw;
 }
 h2 {
   font-size: 18px;
 }
-.eyebrow {
-  font-size: 11px;
-  font-weight: 700;
-  letter-spacing: 0.12em;
-  color: var(--blue);
-  margin: 0;
-}
-.intro p:not(.eyebrow) {
-  color: var(--muted);
-  margin: 6px 0;
-}
-.metrics {
-  display: flex;
-  gap: 24px;
-}
-.metric {
-  display: grid;
-  min-width: 70px;
-}
-.metric strong {
-  font-size: 28px;
-  line-height: 1.2;
-}
-.metric span {
-  font-size: 12px;
-  color: var(--muted);
-}
 .health {
-  padding: 13px 18px;
+  padding: 8px 12px;
   border: 1px solid var(--line);
   border-left: 4px solid var(--green);
   border-radius: 6px;
@@ -159,11 +108,6 @@ h2 {
 .health.warning {
   border-left-color: var(--amber);
   background: #fffaf0;
-}
-.health p {
-  margin: 4px 0 0;
-  font-size: 12px;
-  color: var(--muted);
 }
 #time {
   margin-left: 20px;
@@ -360,20 +304,12 @@ footer a {
   aside {
     max-height: 400px;
   }
-  .intro {
-    align-items: start;
-    flex-direction: column;
-  }
   header {
     flex-wrap: wrap;
   }
   #time {
     display: block;
     margin: 4px 0;
-  }
-  nav {
-    order: 3;
-    width: 100%;
   }
   #graph {
     height: 480px;
