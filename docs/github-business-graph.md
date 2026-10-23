@@ -101,7 +101,7 @@ PR merged + Issue open 仍显示目标未完成。某次 agent 成功/失败、�
 
 正式入口：[WudiTask](https://chaowao.github.io/wuditask/)。范围配置和发布、健康检查
 workflow 与工具代码放在同一仓库。`github-view.json` 选择 GitHub 根节点、全仓采集范围和采集限制。
-旧 `wuditask-hub` Pages 保留跳转；业务采集不依赖 Hub 仓库或执行记录。
+业务采集与发布只使用工具仓库，不依赖其他站点或执行记录。
 
 ```bash
 python3 tools/wuditask.py --json build-site \
