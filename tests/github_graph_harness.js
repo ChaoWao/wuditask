@@ -219,3 +219,19 @@ assert.ok(
     .selectGraph(sparse, { kind: "contains", state: "active" })
     .nodes.some((n) => n.id === "unrelated"),
 );
+
+const delivery = {
+  nodes: [
+    { id: "pr", kind: "pr", state: "open", assignees: ["author"] },
+    { id: "issue", kind: "issue", state: "open", assignees: ["owner"] },
+  ],
+  edges: [{ from: "pr", to: "issue", kind: "delivers" }],
+};
+const authorView = model.selectGraph(delivery, {
+  kind: "delivers",
+  owner: "author",
+  state: "active",
+});
+assert.equal(authorView.nodes.length, 2);
+assert.equal(authorView.edges.length, 1);
+assert.deepEqual([...authorView.primary], ["pr"]);

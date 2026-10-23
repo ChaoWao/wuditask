@@ -76,7 +76,10 @@
     const primary = new Set(matches.map((n) => n.id));
     // Retain upstream context for explicit filters; the working view hides terminal
     // nodes even at boundaries. Full relationships remain available in details.
-    const ids = closure(primary, edges, "up");
+    const seeds = new Set(primary);
+    if (options.kind !== "contains")
+      for (const e of edges) if (primary.has(e.from)) seeds.add(e.to);
+    const ids = closure(seeds, edges, "up");
     if (focus) for (const id of ids) if (!focus.has(id)) ids.delete(id);
     if (options.state === "active")
       for (const n of data.nodes) if (isTerminal(n)) ids.delete(n.id);
