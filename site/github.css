@@ -109,11 +109,6 @@ h2 {
   border-left-color: var(--amber);
   background: #fffaf0;
 }
-#time {
-  margin-left: 20px;
-  font-size: 12px;
-  color: var(--muted);
-}
 .toolbar {
   display: flex;
   gap: 12px;
@@ -306,10 +301,6 @@ footer a {
   }
   header {
     flex-wrap: wrap;
-  }
-  #time {
-    display: block;
-    margin: 4px 0;
   }
   #graph {
     height: 480px;

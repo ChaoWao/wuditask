@@ -20,8 +20,7 @@
     </header>
     <main id="main">
       <section class="health" aria-label="同步状态">
-        <strong id="health" role="status">正在读取…</strong
-        ><span id="time"></span>
+        <strong id="health" role="status">正在读取…</strong>
       </section>
       <div class="toolbar">
         <label
@@ -62,7 +61,6 @@
       <div id="tree-controls" class="tree-controls">
         <button id="expand-all" type="button" disabled>全部展开</button>
         <button id="collapse-all" type="button" disabled>全部收起</button>
-        <span id="tree-hint" class="muted"></span>
       </div>
       <p id="caption" class="muted"></p>
       <div class="workspace">
@@ -79,7 +77,7 @@
           <p>点击节点或表格中的任务，查看目标、当前进展、剩余工作和下一步。</p>
         </aside>
       </div>
-      <details class="table-panel">
+      <details open class="table-panel">
         <summary>列表查看</summary>
         <div class="table-scroll">
           <table>

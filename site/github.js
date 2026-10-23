@@ -340,13 +340,12 @@
         ? "数据已过期"
         : status === "partial"
           ? "部分采集 · 存在未知或受限信息"
-          : "已同步";
+          : "";
     $("health").parentElement.classList.toggle(
       "warning",
       refreshFailed || status !== "complete",
     );
-    $("time").textContent =
-      "更新于 " + new Date(data.generated_at).toLocaleString();
+    $("health").parentElement.hidden = !refreshFailed && status === "complete";
   }
   function fillFilter(id, values) {
     const select = $(id),
@@ -501,9 +500,6 @@
     canvas.replaceChildren();
     $("tree-controls").hidden = options.kind !== "contains";
     $("expand-all").disabled = $("collapse-all").disabled = !folding;
-    $("tree-hint").textContent = filtering
-      ? "筛选 / 聚焦时自动展开匹配路径；清除后恢复折叠状态。"
-      : "点击 ＋ / − 展开收起；悬停或键盘聚焦查看摘要。";
     $("caption").textContent =
       `${view.nodes.length} 个任务 · ${view.edges.length} 条关系` +
       (diagram.unresolved.size ? " · 存在依赖环" : "");
@@ -686,7 +682,10 @@
       data = next;
       if (collapsed === null) collapsed = initialCollapsed(data);
       refreshFailed = false;
-      fillFilter("repo", data.nodes.map((n) => n.repo).filter(Boolean));
+      const repos = [...new Set(data.nodes.map((n) => n.repo).filter(Boolean))];
+      fillFilter("repo", repos);
+      $("repo").closest("label").hidden = repos.length <= 1;
+      if (repos.length <= 1) $("repo").value = "";
       fillFilter(
         "owner",
         data.nodes.flatMap((n) => n.assignees || []),
