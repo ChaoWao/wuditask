@@ -33,7 +33,7 @@ def issue(n, repo="acme/service", **fields):
         "state_reason": None,
         "assignees": [{"login": "alice"}],
         "updated_at": STAMP,
-        "body": "BODY MUST NOT BE PUBLISHED",
+        "body": "<!-- BODY MUST NOT BE PUBLISHED -->",
         **fields,
     }
 

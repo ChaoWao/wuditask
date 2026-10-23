@@ -11,6 +11,7 @@ import subprocess
 from typing import Any
 
 from .errors import WudiTaskError
+from .github_summary import body_summary
 from .util import utc_now
 
 _URL = re.compile(
@@ -336,6 +337,7 @@ def collect_graph(scope: GraphScope, reader: GitHubReader | None = None) -> dict
                 "number": canonical.number,
                 "url": canonical.url,
                 "title": raw["title"],
+                "summary": body_summary(raw.get("body")),
                 "state": state,
                 "state_reason": raw.get("state_reason"),
                 "assignees": assignees,

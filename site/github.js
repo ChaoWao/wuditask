@@ -349,7 +349,7 @@
     if (!n) {
       panel.append(
         el("h2", "选择一个任务"),
-        el("p", "查看来源、负责人、前置条件及当前 PR 的交付证据。"),
+        el("p", "查看目标、当前进展、剩余工作和下一步。"),
       );
       return;
     }
@@ -361,6 +361,53 @@
       a.rel = "noopener noreferrer";
       panel.append(a);
     }
+    const summary = n.summary || {};
+    const core = el("div", undefined, "core-summary");
+    core.append(el("p", "摘自 GitHub 正文 · 以原文更新为准", "muted"));
+    if (n.errors?.some((e) => e.field === "observation"))
+      core.append(
+        el(
+          "p",
+          "采集中来源发生变化或未能复核，请打开原文确认。",
+          "summary-warning",
+        ),
+      );
+    let hasSummary = false;
+    for (const [key, title] of [
+      ["goal", "要做什么"],
+      ["progress", "当前进展"],
+      ["remaining", "剩余工作 / 阻塞"],
+      ["next", "下一步"],
+    ]) {
+      const section = summary[key];
+      if (!section?.items?.length) continue;
+      hasSummary = true;
+      core.append(el("h3", title));
+      section.items.forEach((text) => core.append(el("p", text)));
+      if (section.truncated)
+        core.append(
+          el("small", "部分摘录，完整内容见原 Issue / PR。", "muted"),
+        );
+    }
+    const missing = [
+      ["progress", "当前进展"],
+      ["remaining", "剩余工作 / 阻塞"],
+      ["next", "下一步"],
+    ]
+      .filter(([key]) => !summary[key]?.items?.length)
+      .map(([, title]) => title);
+    if (!hasSummary)
+      core.append(
+        el("p", "正文尚无可提取的核心总结，请打开原 Issue / PR 查看。"),
+      );
+    else if (missing.length)
+      core.append(
+        el("p", "正文未明确列出：" + missing.join("、") + "。", "muted"),
+      );
+    panel.append(core);
+    const source = el("details", undefined, "source-details");
+    source.append(el("summary", "来源详情与关联任务"));
+    panel.append(source);
     const list = el("dl");
     const fields = [
       ["业务状态", businessState(n)],
@@ -384,7 +431,7 @@
     fields.forEach(([title, value]) =>
       list.append(el("dt", title), el("dd", value || "未知")),
     );
-    panel.append(list);
+    source.append(list);
     [
       ["查看前置", "up"],
       ["查看后继", "down"],
@@ -394,11 +441,11 @@
         focus = { id: n.id, direction };
         render();
       };
-      panel.append(button);
+      source.append(button);
     });
     const linked = data.edges.filter((e) => e.from === n.id || e.to === n.id);
     if (linked.length) {
-      panel.append(el("h3", "原生关系"));
+      source.append(el("h3", "原生关系"));
       const ul = el("ul");
       linked.forEach((e) => {
         const other = data.nodes.find(
@@ -410,10 +457,10 @@
         li.append(b);
         ul.append(li);
       });
-      panel.append(ul);
+      source.append(ul);
     }
     if ((n.errors || []).length)
-      panel.append(
+      source.append(
         el(
           "p",
           "未完成读取：" +
