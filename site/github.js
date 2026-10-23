@@ -332,6 +332,8 @@
   let data = null,
     selected = null,
     expandedOwners = new Set(),
+    scale = 1,
+    drawing = null,
     refreshFailed = false,
     collapsed = null,
     summaryAnchor = null,
@@ -342,6 +344,24 @@
     if (text !== undefined) n.textContent = text;
     if (className) n.className = className;
     return n;
+  }
+  function svg(tag, attrs, text) {
+    const n = document.createElementNS("http://www.w3.org/2000/svg", tag);
+    Object.entries(attrs || {}).forEach(([k, v]) =>
+      n.setAttribute(k, String(v)),
+    );
+    if (text !== undefined) n.textContent = text;
+    return n;
+  }
+  function trim(s, n) {
+    let result = "",
+      width = 0;
+    for (const ch of String(s)) {
+      width += ch.codePointAt(0) > 255 ? 2 : 1;
+      if (width > n) return result + "…";
+      result += ch;
+    }
+    return result;
   }
   function hideSummary() {
     clearTimeout(summaryTimer);
@@ -550,6 +570,134 @@
       );
     return card;
   }
+  function applyScale() {
+    if (drawing) {
+      drawing.svg.style.width = drawing.width * scale + "px";
+      drawing.svg.style.height = drawing.height * scale + "px";
+    }
+  }
+  function renderDag(filtered, folding) {
+    const view = folding ? collapseGraph(filtered, collapsed) : filtered;
+    const diagram = layout(view.nodes, view.edges),
+      canvas = $("graph");
+    if (!view.nodes.length) {
+      drawing = null;
+      return;
+    }
+    const root = svg("svg", {
+      viewBox: `0 0 ${diagram.width} ${diagram.height}`,
+      role: "group",
+      "aria-label": "重点工作 DAG：Issue 与关联 PR",
+    });
+    const defs = svg("defs"),
+      marker = svg("marker", {
+        id: "arrow",
+        viewBox: "0 0 10 10",
+        refX: 9,
+        refY: 5,
+        markerWidth: 7,
+        markerHeight: 7,
+        orient: "auto-start-reverse",
+      });
+    marker.append(svg("path", { d: "M 0 0 L 10 5 L 0 10 z", fill: "#9dabb9" }));
+    defs.append(marker);
+    root.append(defs);
+    view.edges.forEach((e) => {
+      const a = diagram.positions.get(e.from),
+        b = diagram.positions.get(e.to),
+        x = a.x + 280,
+        y = a.y + 46;
+      root.append(
+        svg("path", {
+          d: `M${x},${y} C${x + 45},${y} ${b.x - 45},${b.y + 46} ${b.x},${b.y + 46}`,
+          class: "edge" + (e.kind === "relates" ? " related" : ""),
+          "data-from": e.from,
+          "data-to": e.to,
+          "marker-end": "url(#arrow)",
+        }),
+      );
+    });
+    view.nodes.forEach((n) => {
+      const pos = diagram.positions.get(n.id),
+        boundary = n.kind === "boundary";
+      const g = svg("g", {
+        transform: `translate(${pos.x},${pos.y})`,
+        class:
+          "node" +
+          (n.kind === "pr" ? " pr" : "") +
+          (boundary ? " boundary" : "") +
+          (selected === n.id ? " selected" : ""),
+        role: "button",
+        tabindex: 0,
+        "aria-label": label(n) + " " + n.title,
+        "data-node": n.id,
+      });
+      g.append(
+        svg("rect", { width: 280, height: 94, rx: 7 }),
+        svg("text", { x: 13, y: 22, class: "label" }, trim(label(n), 30)),
+        svg("text", { x: 13, y: 46, class: "title" }, trim(n.title, 28)),
+        svg(
+          "text",
+          { x: 13, y: 67, class: "meta" },
+          trim((n.assignees || []).join(", ") || "未指派 / 未知", 36),
+        ),
+        svg(
+          "text",
+          { x: 13, y: 84, class: "meta" },
+          trim(
+            businessState(n) +
+              (["blocked", "unknown", "invalid", "needs_assessment"].includes(
+                n.prerequisites,
+              )
+                ? " · " + prerequisiteLabels[n.prerequisites]
+                : ""),
+            38,
+          ),
+        ),
+      );
+      bindSummary(g, n);
+      g.onclick = () => choose(n.id);
+      g.onkeydown = (event) => {
+        if (event.key === "Enter" || event.key === " ") {
+          event.preventDefault();
+          choose(n.id);
+        }
+      };
+      root.append(g);
+      const count = filtered.edges.filter((e) => e.from === n.id).length;
+      if (folding && count) {
+        const toggle = svg("g", {
+          transform: `translate(${pos.x + 246},${pos.y + 4})`,
+          class: "tree-toggle",
+          role: "button",
+          tabindex: 0,
+          "data-toggle": n.id,
+          "data-source": "graph",
+          "aria-expanded": !collapsed.has(n.id),
+          "aria-label": `${collapsed.has(n.id) ? "展开" : "收起"} ${n.title} 的 ${count} 个直接子项`,
+        });
+        toggle.append(
+          svg("rect", { width: 30, height: 26, rx: 5 }),
+          svg(
+            "text",
+            { x: 15, y: 19, "text-anchor": "middle" },
+            collapsed.has(n.id) ? "+" : "−",
+          ),
+        );
+        toggle.onclick = () => toggleNode(n.id, "graph");
+        toggle.onkeydown = (event) => {
+          if (event.key === "Enter" || event.key === " ") {
+            event.preventDefault();
+            toggleNode(n.id, "graph");
+          }
+        };
+        root.append(toggle);
+      }
+    });
+    canvas.append(root);
+    drawing = { svg: root, width: diagram.width, height: diagram.height };
+    applyScale();
+  }
   function render() {
     if (!data) return;
     hideSummary();
@@ -579,54 +727,10 @@
     $("expand-all").disabled = $("collapse-all").disabled = filtering;
     const cyclic = layout(view.nodes, view.edges).unresolved;
     if (cyclic.size) $("caption").textContent += " · 层级关系存在环";
-    const childEdges = (id) => view.edges.filter((e) => e.from === id);
-    function tree(id, edge, path = new Set()) {
-      if (path.has(id))
-        return el("p", "层级关系成环，请在 GitHub 核定。", "summary-warning");
-      const n = byId.get(id),
-        section = el("div", undefined, "work-branch"),
-        card = workCard(n, edge),
-        children = childEdges(id);
-      section.append(card);
-      if (children.length) {
-        const toggle = el(
-          "button",
-          collapsed.has(id) && !filtering ? "＋" : "−",
-          "work-toggle",
-        );
-        toggle.dataset.toggle = id;
-        toggle.dataset.source = "graph";
-        toggle.setAttribute("aria-label", `展开或收起 ${n.title}`);
-        toggle.setAttribute(
-          "aria-expanded",
-          String(!collapsed.has(id) || filtering),
-        );
-        toggle.disabled = filtering;
-        toggle.onclick = () => toggleNode(id, "graph");
-        card.prepend(toggle);
-        if (!collapsed.has(id) || filtering || cyclic.has(id)) {
-          const sub = el("div", undefined, "work-children");
-          for (const e of children)
-            sub.append(tree(e.to, e, new Set([...path, id])));
-          section.append(sub);
-        }
-      }
-      return section;
-    }
+    $("dag-zoom").hidden = options.scope !== "main";
+    canvas.classList.toggle("dag-canvas", options.scope === "main");
     if (options.scope === "main") {
-      const incoming = new Set(view.edges.map((e) => e.to)),
-        roots = view.nodes.filter((n) => !incoming.has(n.id));
-      const reachable = closure(
-        roots.map((n) => n.id),
-        view.edges,
-        "down",
-      );
-      for (const n of roots) canvas.append(tree(n.id));
-      for (const n of view.nodes) {
-        if (reachable.has(n.id)) continue;
-        canvas.append(tree(n.id));
-        for (const id of closure([n.id], view.edges, "down")) reachable.add(id);
-      }
+      renderDag(view, !filtering);
     } else {
       const groups = new Map();
       for (const n of view.units) {
@@ -755,6 +859,23 @@
   );
   $("search").oninput = render;
   $("refresh").onclick = load;
+  $("zoom-in").onclick = () => {
+    scale = Math.min(2, scale * 1.2);
+    applyScale();
+  };
+  $("zoom-out").onclick = () => {
+    scale = Math.max(0.25, scale / 1.2);
+    applyScale();
+  };
+  $("zoom-fit").onclick = () => {
+    if (drawing) {
+      scale = Math.max(
+        0.25,
+        Math.min(1, $("graph").clientWidth / drawing.width),
+      );
+      applyScale();
+    }
+  };
   $("expand-all").onclick = () => {
     collapsed.clear();
     data.nodes.forEach((n) =>

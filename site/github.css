@@ -453,3 +453,91 @@ button:disabled {
     width: 100%;
   }
 }
+
+.zoom {
+  position: absolute;
+  right: 10px;
+  top: 10px;
+  display: flex;
+  gap: 4px;
+  z-index: 1;
+}
+#graph.dag-canvas {
+  height: 570px;
+  overflow: auto;
+  background-image: radial-gradient(#d8e1e7 1px, transparent 1px);
+  background-size: 20px 20px;
+}
+#graph svg {
+  display: block;
+}
+.edge {
+  fill: none;
+  stroke: #9dabb9;
+  stroke-width: 1.6;
+}
+.node {
+  cursor: pointer;
+}
+.node rect {
+  fill: white;
+  stroke: #aabccc;
+  stroke-width: 1.4;
+}
+.node.selected rect {
+  stroke: var(--blue);
+  stroke-width: 3;
+}
+.node.boundary rect {
+  fill: #fff8e8;
+  stroke-dasharray: 5 3;
+}
+.node text {
+  fill: var(--ink);
+  font-family: inherit;
+}
+.node .label {
+  font-size: 12px;
+  font-weight: 700;
+  fill: var(--blue);
+}
+.node .title {
+  font-size: 13px;
+}
+.node .meta {
+  font-size: 11px;
+  fill: var(--muted);
+}
+
+.tree-toggle {
+  cursor: pointer;
+}
+.tree-toggle rect {
+  fill: #eaf1fb;
+  stroke: #aabccc;
+}
+.tree-toggle:hover rect {
+  fill: #d5e5fa;
+}
+.tree-toggle text {
+  fill: var(--blue);
+  font-size: 22px;
+  pointer-events: none;
+}
+
+.edge.related {
+  stroke-dasharray: 6 4;
+  stroke: #9270b5;
+}
+.node.pr rect {
+  fill: #faf7ff;
+  stroke: #aa93c3;
+}
+#graph.dag-canvas {
+  padding: 0;
+}
+@media print {
+  .zoom {
+    display: none;
+  }
+}
