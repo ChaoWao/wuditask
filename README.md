@@ -7,7 +7,9 @@ Issue/PR 保存任务目标、责任、验收和业务关系；新业务图直�
 
 ## GitHub 业务 DAG（无需 Hub 任务登记）
 
-业务总览直接从 GitHub 根 Issue 及其原生关系生成，使用现有 WudiTask Pages：
+业务总览直接从 GitHub 根 Issue 及其原生关系生成，正式入口为
+[WudiTask Pages](https://chaowao.github.io/wuditask/)。范围配置、定时发布和健康检查
+位于本工具仓；旧 Hub 网址仅保留跳转。
 
 ```bash
 python3 tools/wuditask.py --json build-site \
@@ -48,6 +50,9 @@ wuditask tool repository/
   wuditask/                          纯 Python 核心
   tools/wuditask.py                  统一入口
   site/                              静态 dashboard
+  github-view.json                    公开业务图根节点与采集限制
+  .github/workflows/pages.yml         业务图构建和发布
+  .github/workflows/pages-health.yml  线上快照新鲜度检查
   .agents/skills/                    Codex/Claude 共用 skills
   schemas/task.schema.json           公开任务 v3 契约
   schemas/deletion-receipt.schema.json 公开删除回执 v2 契约
@@ -57,7 +62,7 @@ wuditask-hub repository/
   data/open/<task-id>.json           未归档任务
   data/archive/<year>/<task-id>.json 正常任务的归档记录
   data/deletions/<receipt-id>.json   持久删除回执与 ID 保留
-  .github/workflows/pages.yml        固定工具版本后校验、构建、部署
+  .github/workflows/pages.yml        旧网址跳转部署
 ```
 
 ## 快速开始
@@ -279,7 +284,7 @@ Pages artifact，因此不是敏感信息擦除工具。
 
 新的业务图部署入口见 [GitHub 业务图](docs/github-business-graph.md)，以下描述未传 scope 的旧构建模式。
 
-Pages workflow 位于 Hub 仓。它 checkout Hub，再 checkout workflow 中固定的
+以下是旧执行看板的构建方式，不是当前正式站点部署。旧模式 checkout Hub，再 checkout workflow 中固定的
 WudiTask 完整 commit SHA，使用工具仓的 validator 与 `site/` 构建
 dashboard，并查询 canonical GitHub source 生成独立 delivery state。站点包含
 任务列表、安装说明，以及可按全部仓或单个仓查看的任务依赖 DAG；全仓视图按

@@ -1,0 +1,44 @@
+name: Check WudiTask Pages freshness
+
+on:
+  schedule:
+    - cron: "47 * * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  health:
+    if: vars.WUDITASK_PAGES_ENABLED == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - name: Verify the published business snapshot
+        run: |
+          python3 - <<'PYTHON'
+          import json
+          import os
+          import time
+          from datetime import datetime, timezone
+          from urllib.request import urlopen
+
+          url = "https://chaowao.github.io/wuditask/graph.json?health=" + str(int(time.time()))
+          with urlopen(url, timeout=45) as response:
+              snapshot = json.load(response)
+          if snapshot.get("format") != "github-business-graph":
+              raise SystemExit("Published snapshot has the wrong format")
+          generated = datetime.fromisoformat(snapshot["generated_at"].replace("Z", "+00:00"))
+          age = (datetime.now(timezone.utc) - generated).total_seconds()
+          limit = snapshot["stale_after_seconds"]
+          if type(limit) is not int or not 0 < limit <= 604800:
+              raise SystemExit("Invalid freshness threshold")
+          status = snapshot.get("status")
+          healthy = -300 <= age <= limit and status == "complete"
+          summary = f"Snapshot status: {status}; age: {int(age)} s; limit: {limit} s."
+          print(summary)
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as out:
+              out.write("## Published business graph health\n\n" + summary + "\n")
+          if not healthy:
+              raise SystemExit("Business graph is stale or incomplete; inspect the Pages build and graph diagnostics")
+          PYTHON

@@ -81,20 +81,26 @@ API 分页完整读取，网络/权限/GraphQL 部分错误按字段暴露，错
 PR merged + Issue open 仍显示目标未完成。某次 agent 成功/失败、旧 Hub archive
 均不改变业务图的判断。当前执行与内部计划显示“未接入”，不能解释为无人执行。
 
-## 在现有 Hub Pages 部署
+## 在 WudiTask Pages 部署
 
-不建立第三个网站。Hub 保留配置/部署职责，工具实现留在 WudiTask。
-将 scope 保存为 Hub 根目录 `github-view.json`，Pages workflow 使用：
+正式入口：[WudiTask](https://chaowao.github.io/wuditask/)。范围配置和发布、健康检查
+workflow 与工具代码放在同一仓库。`github-view.json` 只选择 GitHub 根节点和采集限制。
+旧 `wuditask-hub` Pages 保留跳转；业务采集不依赖 Hub 仓库或执行记录。
 
 ```bash
-python3 tool/tools/wuditask.py --json build-site \
-  --github-scope hub/github-view.json --output "$GITHUB_WORKSPACE/_site"
+python3 tools/wuditask.py --json build-site \
+  --github-scope github-view.json --output "$GITHUB_WORKSPACE/_site"
 ```
 
-工具 checkout 必须固定到包含此功能的完整 commit SHA。沿用 Hub 的小时级 schedule、
-手动触发和 Pages 发布串行组；push paths 加入 `github-view.json`。
-业务仓的 Issue 事件不会直接触发另一个 Hub 仓的 workflow，定时采集负责补齐。
-构建不需要先 validate 旧任务表；执行台账的维护和检查可另行保留。
+在工具仓 Settings → Pages 选择 GitHub Actions，并设置仓库变量
+`WUDITASK_PAGES_ENABLED=true`。每次构建 checkout 已提交的默认分支并运行完整测试，
+不执行 PR 分支代码。读取使用 workflow token，或可选的 `WUDITASK_GITHUB_TOKEN` secret。
+发布按并发组串行执行：相关代码/配置 push、手动触发，以及每小时第 17 分钟。
+业务仓 Issue 事件不会直接触发本仓 workflow，定时采集负责补齐。
+
+独立健康检查在每小时第 47 分钟运行，也支持手动触发；检查线上快照完整性和新鲜度。
+维护者需启用 Actions 失败通知；GitHub 调度中断不保证能自行报警。
+旧站不再定时采集，避免存在两份独立刷新、状态不一致的看板。
 
 所有根都不可读时命令失败，不替换本地上一份输出；Actions 应停止发布，现有 Pages
 仍保留上次部署，浏览器会根据数据年龄标旧。有可读根但部分字段失败时发布明确的

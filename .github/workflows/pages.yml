@@ -1,0 +1,96 @@
+name: Deploy WudiTask Pages
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - "github-view.json"
+      - "wuditask/**"
+      - "tools/**"
+      - "site/**"
+      - "tests/**"
+      - ".github/workflows/pages.yml"
+  schedule:
+    - cron: "17 * * * *"
+  workflow_dispatch:
+
+permissions:
+  checks: read
+  contents: read
+  issues: read
+  pages: write
+  pull-requests: read
+  statuses: read
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    if: github.event_name != 'schedule' || vars.WUDITASK_PAGES_ENABLED == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    env:
+      GH_TOKEN: ${{ secrets.WUDITASK_GITHUB_TOKEN || github.token }}
+    steps:
+      - name: Check out WudiTask
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          persist-credentials: false
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - name: Set up Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: "24"
+      - name: Verify tool candidate
+        run: python3 -m unittest discover -s tests -v
+      - name: Build GitHub business graph
+        run: |
+          python3 tools/wuditask.py --json build-site \
+            --github-scope github-view.json \
+            --output "$GITHUB_WORKSPACE/_site" > build-result.json
+          cat build-result.json
+      - name: Report collection completeness
+        if: always()
+        run: |
+          python3 - <<'PYTHON'
+          import json, os
+          from pathlib import Path
+          path = Path("build-result.json")
+          result = json.loads(path.read_text()) if path.exists() and path.stat().st_size else {}
+          status = result.get("status", "failed")
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as out:
+              out.write(f"## GitHub business graph: {status}\n\n")
+              out.write(f"Nodes: {result.get('nodes', 0)}; relations: {result.get('edges', 0)}.\n\n")
+              if status != "complete":
+                  out.write("Incomplete collection: inspect graph diagnostics and source permissions.\n")
+          if status == "partial":
+              print("::warning::Partial GitHub collection; the published graph exposes unknown fields.")
+          PYTHON
+      - name: Configure Pages
+        if: vars.WUDITASK_PAGES_ENABLED == 'true'
+        uses: actions/configure-pages@v5
+      - name: Upload Pages artifact
+        if: vars.WUDITASK_PAGES_ENABLED == 'true'
+        uses: actions/upload-pages-artifact@v4
+        with:
+          path: _site
+
+  deploy:
+    if: vars.WUDITASK_PAGES_ENABLED == 'true'
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    runs-on: ubuntu-latest
+    needs: build
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4

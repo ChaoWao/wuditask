@@ -1,0 +1,6 @@
+{
+  "roots": ["https://github.com/hw-native-sys/simpler/issues/2670"],
+  "max_nodes": 500,
+  "max_pages": 20,
+  "stale_after_seconds": 10800
+}
