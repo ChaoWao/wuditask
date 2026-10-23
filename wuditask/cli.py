@@ -44,6 +44,10 @@ from .workflow import (
 
 
 HELP_COMMANDS = {
+    "coord": (
+        "Personal execution: configure, acquire, inspect, check, guard, quiesce, release, recover.",
+        "wuditask coord --help",
+    ),
     "add": ("Add a GitHub-backed task reference.", "$wuditask-add"),
     "assign": ("Assign GitHub responsibility without starting work.", "$wuditask-assign"),
     "check": ("Read current dependencies, owners, agents, and delivery.", "$wuditask-check"),
@@ -88,6 +92,10 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--json", action="store_true", help="Emit stable JSON output.")
     parser.add_argument("--actor", help=argparse.SUPPRESS)
     commands = parser.add_subparsers(dest="command", required=True)
+
+    from .execution_cli import add_parser
+
+    add_parser(commands)
 
     add = commands.add_parser("add", help="Add a canonical GitHub task reference.")
     add.add_argument("--spec", help="JSON spec path, or - for stdin.")
@@ -859,11 +867,12 @@ def _help(topic: str | None) -> dict[str, Any]:
         "topic": topic or "workflow",
         "cli_invocation": "wuditask help [topic]",
         "workflow": [
-            "GitHub Issue or PR is the task contract and live owner source.",
-            "assign changes GitHub responsibility; execute separately starts a Hub agent run.",
-            "execute prefers ready work assigned to you, then self-assigns ready unowned work.",
-            "check refreshes dependencies, owners, active agents, PRs, reviews, and checks.",
-            "release stops only the matching run; archive records a verified terminal outcome.",
+            "GitHub Issue/PR is the business source of truth; build-site reads it directly.",
+            "Personal coordination: coord configure -> inventory/init -> acquire URL --session FILE.",
+            "coord guard starts one host under a local session lock; coord check verifies current rights.",
+            "Quiesce, verify stopped writers and pending operations, then release with a checkpoint receipt.",
+            "No automatic expiry or self-assignment. Recovery requires explicit user authorization and stop evidence.",
+            "Unprefixed queue commands below are legacy-only; migrated storage rejects them.",
         ],
         "commands": [
             {
@@ -874,10 +883,9 @@ def _help(topic: str | None) -> dict[str, Any]:
             for name in names
         ],
         "notes": [
-            "The tool repository and task Hub are separate remotes.",
-            "Hub writes use ordinary no-force pushes.",
-            "Start work only after execute returns work_authorized=true and sync.confirmed=true.",
-            "There are no dep-check or reconcile compatibility commands; use check.",
+            "Use one authoritative execution remote/branch across all environments of one GitHub account.",
+            "Writes use ordinary no-force pushes; unknown responses must be reconciled before work.",
+            "See docs/personal-coordination.md for migration, manual stop receipts and Part 3 boundaries.",
         ],
     }
 
@@ -970,6 +978,10 @@ def _write_actor(args: argparse.Namespace, coordinator: GitCoordinator) -> Ident
 
 def run(args: argparse.Namespace, tool_root: Path) -> dict[str, Any]:
     tool_root = tool_root.expanduser().resolve()
+    if args.command == "coord":
+        from .execution_cli import run as coordinate
+
+        return coordinate(args)
     if args.command == "help":
         return _help(args.topic)
     if args.command == "selfupdate":

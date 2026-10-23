@@ -1,5 +1,5 @@
 [project]
 name = "wuditask"
 version = "0.8.0"
-description = "A serverless, GitHub-backed distributed task queue for humans and agents"
+description = "GitHub business DAG and personal cross-environment execution coordination"
 requires-python = ">=3.10"

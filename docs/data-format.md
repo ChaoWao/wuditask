@@ -1,8 +1,9 @@
 # WudiTask 数据格式 v3
 
+> 新的个人跨环境流程使用 [coord 协议](personal-coordination.md)。本文仅描述未迁移的存量队列。
 > 本文描述存量 Hub 执行协议。新增的 [GitHub 业务图](github-business-graph.md)
 > 直接读取 GitHub 原生关系，不使用 Hub priority、dependencies 或 archive 解锁。
-> 个人执行数据的协议迁移尚未进行。
+> 工具提供显式迁移命令，不自动迁移已有远端。
 
 
 任务与删除回执的机器契约分别位于 `schemas/task.schema.json` 和

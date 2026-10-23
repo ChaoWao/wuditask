@@ -19,7 +19,7 @@ try:
 except ImportError:  # pragma: no cover - exercised on Windows
     fcntl = None
 
-Operation = Callable[[TaskRepository], dict[str, Any]]
+Operation = Callable[[Any], dict[str, Any]]
 BeforePush = Callable[[int, Path], None]
 
 
@@ -115,6 +115,8 @@ class GitCoordinator:
         cache_root: Path | None = None,
         max_attempts: int = 5,
         before_push: BeforePush | None = None,
+        repository_factory: Callable[[Path], Any] = TaskRepository,
+        write_paths: tuple[str, ...] = ("data",),
     ) -> None:
         if (local_root is None) == (remote is None):
             raise WudiTaskError(
@@ -129,6 +131,12 @@ class GitCoordinator:
         self.root = local_root.resolve() if local_root is not None else None
         self.remote = remote.strip() if remote is not None else None
         self.branch = branch.strip() if branch is not None else None
+        if not write_paths or not set(write_paths) <= {
+            "data", "hub.json", "coordination.json"
+        }:
+            raise WudiTaskError("invalid_write_paths", "Unsupported transaction paths.")
+        self.repository_factory = repository_factory
+        self.write_paths = write_paths
         self.max_attempts = max_attempts
         self.before_push = before_push
         self._cache_root = (
@@ -186,14 +194,14 @@ class GitCoordinator:
         return self._cache_root / "locks" / "operations" / f"{operation.name}.lock"
 
     @contextlib.contextmanager
-    def snapshot(self) -> Iterator[TaskRepository]:
+    def snapshot(self) -> Iterator[Any]:
         if not self.distributed:
             assert self.root is not None
-            repository = TaskRepository(self.root)
+            repository = self.repository_factory(self.root)
             yield repository
             return
         with self._remote_worktree("read") as checkout:
-            yield TaskRepository(checkout)
+            yield self.repository_factory(checkout)
 
     def write(
         self,
@@ -204,7 +212,7 @@ class GitCoordinator:
         if not self.distributed:
             assert self.root is not None
             with self._local_lock():
-                repository = TaskRepository(self.root)
+                repository = self.repository_factory(self.root)
                 result = operation(repository)
             result["sync"] = {
                 "mode": "local",
@@ -216,7 +224,7 @@ class GitCoordinator:
         last_rejection = ""
         for attempt in range(1, self.max_attempts + 1):
             with self._remote_worktree("write") as checkout:
-                repository = TaskRepository(checkout)
+                repository = self.repository_factory(checkout)
                 result = operation(repository)
                 if not result.get("changed", True):
                     result["sync"] = {
@@ -231,7 +239,7 @@ class GitCoordinator:
                         ).stdout.strip(),
                     }
                     return result
-                self._run(["git", "add", "-A", "--", "data"], cwd=checkout)
+                self._run(["git", "add", "-A", "--", *self.write_paths], cwd=checkout)
                 staged = self._run(
                     ["git", "diff", "--cached", "--quiet"],
                     cwd=checkout,

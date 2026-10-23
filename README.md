@@ -41,12 +41,25 @@ Pages、范围配置和健康检查统一放在本仓库：
 
 部署方式、权限和数据边界见 [业务图说明](docs/github-business-graph.md)。
 
-## 后续两部分
+## 个人跨环境协调（Part 2）
 
-1. **个人跨环境协调**：同一用户在多台机器处理同一任务时，只有一个获准主执行；支持交接、恢复和明确释放。不同用户不要求共用执行锁。
-2. **主 agent 内部工作流**：确认目标和方案，形成可执行 DAG，并行派发子 agent，收取结果、验证和交付。
+同一个 GitHub 账号在多台机器处理同一任务时，由 `coord` 维护一个获准主执行。
+直接使用 Issue/PR URL，无需人工 add，不修改 GitHub 指派或业务完成状态。
 
-这两部分尚待实施，不影响当前 GitHub 业务看板。已有执行队列的维护资料见 [存量执行协议](docs/legacy-execution.md)，不作为新流程的使用要求。
+```bash
+python3 tools/wuditask.py coord configure --remote git@github.com:USER/PRIVATE-EXECUTION.git
+python3 tools/wuditask.py coord inventory
+python3 tools/wuditask.py coord init --old-writers-stopped '新建空存储，没有旧执行器'
+python3 tools/wuditask.py coord acquire https://github.com/ORG/REPO/issues/123 --session execution.json
+```
+
+支持持久 run 重试、当前执行核对、宿主启动锁、停写、checkpoint 交接和显式恢复。
+首版交接要求人工核验旧 writer 与外部操作已停止；无自动超时抢占，也不声称能强制
+停止任意进程。详细使用和迁移见 [个人协调协议](docs/personal-coordination.md)。
+
+旧数据不会随工具升级自动迁移；[存量协议](docs/legacy-execution.md) 只用于迁移前维护。
+业务看板无需执行存储。**Part 3** 的目标对齐、内部 DAG、子 agent 调度和宿主自动
+停写仍独立推进，通过 Part 2 接口领取和交接，不另建业务台账。
 
 ## 开发验证
 
