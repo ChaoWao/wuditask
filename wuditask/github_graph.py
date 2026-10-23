@@ -51,6 +51,7 @@ class GraphScope:
     max_nodes: int = 500
     max_pages: int = 20
     stale_after_seconds: int = 10800
+    repositories: tuple[str, ...] = ()
 
     @classmethod
     def read(cls, path: Path) -> GraphScope:
@@ -58,6 +59,7 @@ class GraphScope:
             value = json.loads(path.read_text(encoding="utf-8"))
             if not isinstance(value, dict) or set(value) - {
                 "roots",
+                "repositories",
                 "max_nodes",
                 "max_pages",
                 "stale_after_seconds",
@@ -66,7 +68,20 @@ class GraphScope:
             roots = value["roots"]
             if not isinstance(roots, list) or not roots or len(roots) > 100:
                 raise ValueError("roots must contain 1 to 100 GitHub URLs")
-            options = {}
+            repositories = value.get("repositories", [])
+            if (
+                not isinstance(repositories, list)
+                or len(repositories) > 20
+                or any(
+                    not isinstance(repo, str)
+                    or not re.fullmatch(r"[\w.-]+/[\w.-]+", repo)
+                    for repo in repositories
+                )
+            ):
+                raise ValueError("repositories must contain up to 20 owner/repo names")
+            options = {
+                "repositories": tuple(dict.fromkeys(r.lower() for r in repositories))
+            }
             for key, default, ceiling in [
                 ("max_nodes", 500, 5000),
                 ("max_pages", 20, 100),
@@ -183,6 +198,47 @@ class GitHubReader:
                 raise ReadError("invalid_response") from exc
         raise ReadError("page_limit")
 
+    def closing_issues(self, ref: Reference) -> list[str]:
+        query = """query($owner:String!,$repo:String!,$number:Int!,$cursor:String) {
+          repository(owner:$owner,name:$repo) { pullRequest(number:$number) {
+            closingIssuesReferences(first:100,after:$cursor) {
+              nodes { url } pageInfo { hasNextPage endCursor }
+            }
+          } }
+        }"""
+        owner, repo = ref.repo.split("/")
+        cursor, results = None, []
+        for _ in range(self.max_pages):
+            arguments = [
+                "graphql",
+                "-f",
+                f"query={query}",
+                "-f",
+                f"owner={owner}",
+                "-f",
+                f"repo={repo}",
+                "-F",
+                f"number={ref.number}",
+            ]
+            if cursor:
+                arguments.extend(["-f", f"cursor={cursor}"])
+            value = self._request(arguments)
+            try:
+                connection = value["data"]["repository"]["pullRequest"][
+                    "closingIssuesReferences"
+                ]
+                results.extend(item["url"] for item in connection["nodes"])
+                info = connection["pageInfo"]
+                if info["hasNextPage"] is False:
+                    return results
+                following = info["endCursor"]
+                if not following or following == cursor:
+                    raise ReadError("invalid_cursor")
+                cursor = following
+            except (KeyError, TypeError) as exc:
+                raise ReadError("invalid_response") from exc
+        raise ReadError("page_limit")
+
     def review_decision(self, ref: Reference) -> str:
         query = """query($owner:String!,$repo:String!,$number:Int!) {
           repository(owner:$owner,name:$repo) { pullRequest(number:$number) { reviewDecision } }
@@ -247,6 +303,42 @@ def _checks(checks: list, statuses: list) -> dict:
     return counts
 
 
+def explicit_issue_links(body: str, repo: str) -> list[Reference]:
+    """Only a standalone 'Part of' declaration is a body association, never a blocker."""
+    body = re.sub(r"<!--.*?(?:-->|$)", "", body or "", flags=re.S)
+    result, fence, hidden = [], None, 0
+    for raw in body.splitlines():
+        line = raw.strip()
+        marker = re.match(r"^(`{3,}|~{3,})", line)
+        if marker:
+            run = marker[1]
+            if fence is None:
+                fence = run
+            elif run[0] == fence[0] and len(run) >= len(fence):
+                fence = None
+            continue
+        if fence:
+            continue
+        opens = len(re.findall(r"<(?:details|script|style)\b", line, re.I))
+        closes = len(re.findall(r"</(?:details|script|style)\s*>", line, re.I))
+        if hidden or opens:
+            hidden = max(0, hidden + opens - closes)
+            continue
+        match = re.fullmatch(
+            r"(?:[-*] )?Part of:?\s+(#[1-9][0-9]*|https://github\.com/[\w.-]+/[\w.-]+/issues/[1-9][0-9]*)[.]?",
+            line,
+            re.I,
+        )
+        if match:
+            token = match[1]
+            result.append(
+                Reference(repo, "issue", int(token[1:]))
+                if token.startswith("#")
+                else Reference.parse(token)
+            )
+    return list(dict.fromkeys(result))
+
+
 def collect_graph(scope: GraphScope, reader: GitHubReader | None = None) -> dict:
     """Expand roots through child Issues and prerequisites; PRs are delivery evidence.
 
@@ -287,6 +379,30 @@ def collect_graph(scope: GraphScope, reader: GitHubReader | None = None) -> dict
             # Do not materialize unbounded boundary nodes; the source relation is marked incomplete.
             return
         pending.append(ref)
+
+    for repo in scope.repositories:
+        try:
+            repository = reader.get(f"repos/{repo}")
+            visibility[repo] = (
+                repository.get("private") is False
+                and repository.get("visibility", "public") == "public"
+            )
+            if not visibility[repo]:
+                raise ReadError("restricted_repository")
+            for item in reader.pages(f"repos/{repo}/issues?state=open"):
+                ref = Reference.parse(item["html_url"])
+                if ref.repo != repo:
+                    raise ReadError("invalid_inventory")
+                enqueue(ref)
+        except (ReadError, KeyError, TypeError, ValueError) as exc:
+            diagnostics.append(
+                {
+                    "code": str(exc)
+                    if isinstance(exc, ReadError)
+                    else "invalid_inventory",
+                    "field": "repository_inventory",
+                }
+            )
 
     while pending:
         ref = pending.popleft()
@@ -397,6 +513,29 @@ def collect_graph(scope: GraphScope, reader: GitHubReader | None = None) -> dict
                             }
                         )
             else:
+                try:
+                    targets = [
+                        Reference.parse(url) for url in reader.closing_issues(canonical)
+                    ]
+                    if any(t.kind != "issue" for t in targets):
+                        raise ReadError("invalid_relation")
+                    node["relations_complete"]["delivers"] = True
+                    for target in targets:
+                        enqueue(target)
+                        pending_edges.append((target, canonical, "delivers"))
+                except (ReadError, KeyError, TypeError, ValueError) as exc:
+                    node["relations_complete"]["delivers"] = False
+                    node["errors"].append(
+                        {
+                            "field": "delivers",
+                            "code": str(exc)
+                            if isinstance(exc, ReadError)
+                            else "invalid_response",
+                        }
+                    )
+                for target in explicit_issue_links(raw.get("body"), canonical.repo):
+                    enqueue(target)
+                    pending_edges.append((target, canonical, "relates"))
                 node.update(
                     head_sha=raw["head"]["sha"],
                     merged_at=raw.get("merged_at"),
@@ -468,10 +607,18 @@ def collect_graph(scope: GraphScope, reader: GitHubReader | None = None) -> dict
                     "from": a,
                     "to": b,
                     "kind": kind,
-                    "source": nodes[resolved[source]].get("url"),
+                    "source": nodes[
+                        resolved[target if kind in {"delivers", "relates"} else source]
+                    ].get("url"),
                     "observed_at": utc_now(),
                 }
             )
+    delivered = {(e["from"], e["to"]) for e in edges if e["kind"] == "delivers"}
+    edges = [
+        e
+        for e in edges
+        if e["kind"] != "relates" or (e["from"], e["to"]) not in delivered
+    ]
     if truncated:
         diagnostics.append(
             {

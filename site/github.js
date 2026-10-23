@@ -1,7 +1,8 @@
 (function () {
   "use strict";
   const names = {
-    contains: "目标拆分：父目标 → 子 Issue（不表示执行先后）",
+    contains: "子 Issue",
+    relates: "正文关联（不表示关闭或阻塞）",
     blocks: "阻塞依赖：前置 Issue → 后续 Issue",
     delivers: "交付关联：PR → Issue（合入不自动完成整个目标）",
   };
@@ -92,6 +93,80 @@
       nodes: data.nodes.filter((n) => ids.has(n.id)),
       edges: visibleEdges,
       primary: new Set([...primary].filter((id) => ids.has(id))),
+    };
+  }
+  function workGraph(data, options = {}) {
+    const byId = new Map(data.nodes.map((n) => [n.id, n]));
+    const associations = data.edges.filter(
+      (e) =>
+        ["delivers", "relates"].includes(e.kind) &&
+        byId.has(e.from) &&
+        byId.has(e.to),
+    );
+    const attached = new Set(associations.map((e) => e.from));
+    const hierarchy = data.edges.filter((e) => e.kind === "contains");
+    const main = closure(data.roots || [], hierarchy, "down");
+    for (const e of associations) if (main.has(e.to)) main.add(e.from);
+    const stateMatch = (n) =>
+      !options.state ||
+      (options.state === "active" ? !isTerminal(n) : n.state === options.state);
+    const textMatch = (n) =>
+      !options.search ||
+      (label(n) + " " + n.title + " " + (n.assignees || []).join(" "))
+        .toLowerCase()
+        .includes(options.search.toLowerCase().replace(/^#/, ""));
+    const associated = (id) =>
+      associations.filter((e) => e.to === id).map((e) => byId.get(e.from));
+    const units = data.nodes.filter((n) => !attached.has(n.id));
+    const inScope = (n) =>
+      options.scope === "other" ? !main.has(n.id) : main.has(n.id);
+    const primary = new Set(
+      units
+        .filter(
+          (n) =>
+            inScope(n) &&
+            (!options.repo || n.repo === options.repo) &&
+            (!options.owner ||
+              (options.owner === "__unassigned"
+                ? !(n.assignees || []).length
+                : (n.assignees || []).includes(options.owner))) &&
+            [n, ...associated(n.id)].some(stateMatch) &&
+            [n, ...associated(n.id).filter(stateMatch)].some(textMatch),
+        )
+        .map((n) => n.id),
+    );
+    const ids =
+      options.scope === "other"
+        ? new Set(primary)
+        : closure(primary, hierarchy, "up");
+    for (const id of ids) {
+      const n = byId.get(id);
+      if (!n || !inScope(n) || (!primary.has(id) && !stateMatch(n)))
+        ids.delete(id);
+    }
+    const visibleUnits = data.nodes.filter((n) => ids.has(n.id));
+    const edges = hierarchy.filter((e) => ids.has(e.from) && ids.has(e.to));
+    for (const e of associations)
+      if (ids.has(e.to) && stateMatch(byId.get(e.from))) {
+        ids.add(e.from);
+        edges.push({ ...e, from: e.to, to: e.from });
+      }
+    return {
+      nodes: data.nodes.filter((n) => ids.has(n.id)),
+      edges,
+      primary,
+      units: visibleUnits,
+      associations: associations.filter(
+        (e) => ids.has(e.to) && ids.has(e.from),
+      ),
+      counts: {
+        main: units.filter(
+          (n) => main.has(n.id) && [n, ...associated(n.id)].some(stateMatch),
+        ).length,
+        other: units.filter(
+          (n) => !main.has(n.id) && [n, ...associated(n.id)].some(stateMatch),
+        ).length,
+      },
     };
   }
   function childIds(data, id) {
@@ -238,6 +313,7 @@
       : data.status;
   }
   const model = {
+    workGraph,
     childIds,
     initialCollapsed,
     collapseGraph,
@@ -252,13 +328,10 @@
   };
   if (typeof module !== "undefined" && module.exports) module.exports = model;
   if (typeof document === "undefined") return;
-  const $ = (id) => document.getElementById(id),
-    NS = "http://www.w3.org/2000/svg";
+  const $ = (id) => document.getElementById(id);
   let data = null,
     selected = null,
-    focus = null,
-    scale = 1,
-    drawing = null,
+    expandedOwners = new Set(),
     refreshFailed = false,
     collapsed = null,
     summaryAnchor = null,
@@ -269,24 +342,6 @@
     if (text !== undefined) n.textContent = text;
     if (className) n.className = className;
     return n;
-  }
-  function svg(tag, attrs, text) {
-    const n = document.createElementNS(NS, tag);
-    Object.entries(attrs || {}).forEach(([k, v]) =>
-      n.setAttribute(k, String(v)),
-    );
-    if (text !== undefined) n.textContent = text;
-    return n;
-  }
-  function trim(s, n) {
-    let result = "",
-      width = 0;
-    for (const ch of String(s)) {
-      width += ch.codePointAt(0) > 255 ? 2 : 1;
-      if (width > n) return result + "…";
-      result += ch;
-    }
-    return result;
   }
   function hideSummary() {
     clearTimeout(summaryTimer);
@@ -326,7 +381,7 @@
     if (collapsed.has(id)) collapsed.delete(id);
     else collapsed.add(id);
     render();
-    // Rendering replaces the SVG/table; keep keyboard navigation at the toggle.
+    // Rendering replaces the tree; keep keyboard navigation at the toggle.
     [...document.querySelectorAll("[data-toggle]")]
       .find((n) => n.dataset.toggle === id && n.dataset.source === source)
       ?.focus();
@@ -432,27 +487,16 @@
       list.append(el("dt", title), el("dd", value || "未知")),
     );
     source.append(list);
-    [
-      ["查看前置", "up"],
-      ["查看后继", "down"],
-    ].forEach(([text, direction]) => {
-      const button = el("button", text);
-      button.onclick = () => {
-        focus = { id: n.id, direction };
-        render();
-      };
-      source.append(button);
-    });
     const linked = data.edges.filter((e) => e.from === n.id || e.to === n.id);
     if (linked.length) {
-      source.append(el("h3", "原生关系"));
+      source.append(el("h3", "关联任务"));
       const ul = el("ul");
       linked.forEach((e) => {
         const other = data.nodes.find(
           (x) => x.id === (e.from === n.id ? e.to : e.from),
         );
         const li = el("li"),
-          b = el("button", `${e.kind} · ${label(other)}`);
+          b = el("button", `${names[e.kind] || e.kind} · ${label(other)}`);
         b.onclick = () => choose(other.id);
         li.append(b);
         ul.append(li);
@@ -468,202 +512,182 @@
         ),
       );
   }
-  function applyScale() {
-    if (drawing) {
-      drawing.svg.style.width = drawing.width * scale + "px";
-      drawing.svg.style.height = drawing.height * scale + "px";
-    }
+  function workCard(n, edge) {
+    const card = el(
+      "div",
+      undefined,
+      "work-card" +
+        (n.kind === "pr" ? " pr" : "") +
+        (selected === n.id ? " selected" : "") +
+        (edge?.kind === "relates" ? " related" : ""),
+    );
+    card.dataset.node = n.id;
+    const button = el("button", n.title, "work-pick");
+    button.onclick = () => choose(n.id);
+    bindSummary(button, n);
+    const meta = el(
+      "small",
+      label(n) + " · " + ((n.assignees || []).join(", ") || "未指派"),
+    );
+    card.append(button, meta);
+    if (isTerminal(n)) card.append(el("small", businessState(n)));
+    if (edge && edge.kind !== "contains")
+      card.append(
+        el(
+          "small",
+          edge.kind === "relates"
+            ? "正文关联 · 非关闭 / 阻塞关系"
+            : "正式关联 PR",
+        ),
+      );
+    if (
+      ["blocked", "unknown", "invalid", "needs_assessment"].includes(
+        n.prerequisites,
+      )
+    )
+      card.append(
+        el("small", prerequisiteLabels[n.prerequisites], "summary-warning"),
+      );
+    return card;
   }
   function render() {
     if (!data) return;
+    hideSummary();
     const options = {
-      kind: $("relation").value,
+      scope: document.querySelector(".scope-tab.active").dataset.scope,
       repo: $("repo").value,
       owner: $("owner").value,
       state: $("state").value,
       search: $("search").value,
-      focus,
     };
-    hideSummary();
-    const filtered = selectGraph(data, options);
+    const view = workGraph(data, options),
+      byId = new Map(view.nodes.map((n) => [n.id, n]));
     const filtering = Boolean(
       options.repo ||
       options.owner ||
-      (options.state && options.state !== "active") ||
       options.search ||
-      options.focus,
+      (options.state && options.state !== "active"),
     );
-    const folding = options.kind === "contains" && !filtering;
-    const view = folding ? collapseGraph(filtered, collapsed) : filtered,
-      diagram = layout(view.nodes, view.edges),
-      canvas = $("graph");
+    const canvas = $("graph");
     canvas.replaceChildren();
-    $("tree-controls").hidden = options.kind !== "contains";
-    $("expand-all").disabled = $("collapse-all").disabled = !folding;
+    for (const scope of ["main", "other"])
+      document.querySelector(
+        `[data-scope="${scope}"] .scope-count`,
+      ).textContent = view.counts[scope];
     $("caption").textContent =
-      `${view.nodes.length} 个任务 · ${view.edges.length} 条关系` +
-      (diagram.unresolved.size ? " · 存在依赖环" : "");
-    $("reset").hidden = !focus;
-    if (!view.nodes.length) {
-      canvas.append(
-        el(
-          "p",
-          options.kind === "blocks"
-            ? "当前范围没有已记录的阻塞关系。"
-            : options.kind === "delivers"
-              ? "当前范围没有交付关联。"
-              : "没有匹配的任务。",
-          "empty",
-        ),
-      );
-      drawing = null;
-    } else {
-      const root = svg("svg", {
-        viewBox: `0 0 ${diagram.width} ${diagram.height}`,
-        role: "group",
-        "aria-label": names[options.kind],
-      });
-      const defs = svg("defs"),
-        marker = svg("marker", {
-          id: "arrow",
-          viewBox: "0 0 10 10",
-          refX: 9,
-          refY: 5,
-          markerWidth: 7,
-          markerHeight: 7,
-          orient: "auto-start-reverse",
-        });
-      marker.append(
-        svg("path", { d: "M 0 0 L 10 5 L 0 10 z", fill: "#9dabb9" }),
-      );
-      defs.append(marker);
-      root.append(defs);
-      view.edges.forEach((e) => {
-        const a = diagram.positions.get(e.from),
-          b = diagram.positions.get(e.to),
-          x = a.x + 280,
-          y = a.y + 46;
-        root.append(
-          svg("path", {
-            d: `M${x},${y} C${x + 45},${y} ${b.x - 45},${b.y + 46} ${b.x},${b.y + 46}`,
-            class: "edge",
-            "marker-end": "url(#arrow)",
-          }),
+      `${view.units.length} 项工作 · ${new Set(view.associations.map((e) => e.from)).size} 个关联 PR`;
+    $("expand-all").disabled = $("collapse-all").disabled = filtering;
+    const cyclic = layout(view.nodes, view.edges).unresolved;
+    if (cyclic.size) $("caption").textContent += " · 层级关系存在环";
+    const childEdges = (id) => view.edges.filter((e) => e.from === id);
+    function tree(id, edge, path = new Set()) {
+      if (path.has(id))
+        return el("p", "层级关系成环，请在 GitHub 核定。", "summary-warning");
+      const n = byId.get(id),
+        section = el("div", undefined, "work-branch"),
+        card = workCard(n, edge),
+        children = childEdges(id);
+      section.append(card);
+      if (children.length) {
+        const toggle = el(
+          "button",
+          collapsed.has(id) && !filtering ? "＋" : "−",
+          "work-toggle",
         );
-      });
-      view.nodes.forEach((n) => {
-        const pos = diagram.positions.get(n.id),
-          boundary = !view.primary.has(n.id) || n.kind === "boundary";
-        const g = svg("g", {
-          transform: `translate(${pos.x},${pos.y})`,
-          class:
-            "node" +
-            (boundary ? " boundary" : "") +
-            (selected === n.id ? " selected" : ""),
-          role: "button",
-          tabindex: 0,
-          "aria-label": label(n) + " " + n.title,
-          "data-node": n.id,
-        });
-        g.append(
-          svg("rect", { width: 280, height: 94, rx: 7 }),
-          svg("text", { x: 13, y: 22, class: "label" }, trim(label(n), 30)),
-          svg("text", { x: 13, y: 46, class: "title" }, trim(n.title, 28)),
-          svg(
-            "text",
-            { x: 13, y: 67, class: "meta" },
-            trim((n.assignees || []).join(", ") || "未指派 / 未知", 36),
-          ),
-          svg(
-            "text",
-            { x: 13, y: 84, class: "meta" },
-            trim(
-              businessState(n) +
-                (["blocked", "unknown", "invalid", "needs_assessment"].includes(
-                  n.prerequisites,
-                )
-                  ? " · " + prerequisiteLabels[n.prerequisites]
-                  : ""),
-              38,
-            ),
-          ),
+        toggle.dataset.toggle = id;
+        toggle.dataset.source = "graph";
+        toggle.setAttribute("aria-label", `展开或收起 ${n.title}`);
+        toggle.setAttribute(
+          "aria-expanded",
+          String(!collapsed.has(id) || filtering),
         );
-        bindSummary(g, n);
-        g.onclick = () => choose(n.id);
-        g.onkeydown = (event) => {
-          if (event.key === "Enter" || event.key === " ") {
-            event.preventDefault();
-            choose(n.id);
-          }
-        };
-        root.append(g);
-        const count = childIds(filtered, n.id).size;
-        if (folding && count) {
-          const toggle = svg("g", {
-            transform: `translate(${pos.x + 246},${pos.y + 4})`,
-            class: "tree-toggle",
-            role: "button",
-            tabindex: 0,
-            "data-toggle": n.id,
-            "data-source": "graph",
-            "aria-expanded": !collapsed.has(n.id),
-            "aria-label": `${collapsed.has(n.id) ? "展开" : "收起"} ${n.title} 的 ${count} 个直接子项`,
-          });
-          toggle.append(
-            svg("rect", { width: 30, height: 26, rx: 5 }),
-            svg(
-              "text",
-              { x: 15, y: 19, "text-anchor": "middle" },
-              collapsed.has(n.id) ? "+" : "−",
-            ),
-          );
-          toggle.onclick = () => toggleNode(n.id, "graph");
-          toggle.onkeydown = (event) => {
-            if (event.key === "Enter" || event.key === " ") {
-              event.preventDefault();
-              toggleNode(n.id, "graph");
-            }
-          };
-          root.append(toggle);
+        toggle.disabled = filtering;
+        toggle.onclick = () => toggleNode(id, "graph");
+        card.prepend(toggle);
+        if (!collapsed.has(id) || filtering || cyclic.has(id)) {
+          const sub = el("div", undefined, "work-children");
+          for (const e of children)
+            sub.append(tree(e.to, e, new Set([...path, id])));
+          section.append(sub);
         }
-      });
-      canvas.append(root);
-      drawing = { svg: root, width: diagram.width, height: diagram.height };
-      applyScale();
+      }
+      return section;
     }
+    if (options.scope === "main") {
+      const incoming = new Set(view.edges.map((e) => e.to)),
+        roots = view.nodes.filter((n) => !incoming.has(n.id));
+      const reachable = closure(
+        roots.map((n) => n.id),
+        view.edges,
+        "down",
+      );
+      for (const n of roots) canvas.append(tree(n.id));
+      for (const n of view.nodes) {
+        if (reachable.has(n.id)) continue;
+        canvas.append(tree(n.id));
+        for (const id of closure([n.id], view.edges, "down")) reachable.add(id);
+      }
+    } else {
+      const groups = new Map();
+      for (const n of view.units) {
+        const owner = (n.assignees || []).join(", ") || "未指派";
+        if (!groups.has(owner)) groups.set(owner, []);
+        groups.get(owner).push(n);
+      }
+      for (const [owner, nodes] of [...groups].sort((a, b) =>
+        a[0].localeCompare(b[0]),
+      )) {
+        const group = el("details", undefined, "owner-group");
+        group.open = filtering || expandedOwners.has(owner);
+        group.ontoggle = () => {
+          group.open ? expandedOwners.add(owner) : expandedOwners.delete(owner);
+        };
+        group.append(el("summary", `${owner} · ${nodes.length} 项工作`));
+        for (const n of nodes) {
+          const unit = el("div", undefined, "work-unit");
+          unit.dataset.unit = n.id;
+          unit.append(workCard(n));
+          const sub = el("div", undefined, "work-children");
+          for (const e of view.associations.filter((e) => e.to === n.id))
+            sub.append(workCard(byId.get(e.from), e));
+          if (sub.childNodes.length) unit.append(sub);
+          group.append(unit);
+        }
+        canvas.append(group);
+      }
+    }
+    if (!view.nodes.length) canvas.append(el("p", "没有匹配的工作。", "empty"));
     const rows = $("rows");
     rows.replaceChildren();
-    view.nodes.forEach((n) => {
+    for (const n of view.units) {
       const tr = el("tr"),
         td = el("td"),
         button = el("button", n.title);
+      tr.dataset.unit = n.id;
       button.onclick = () => choose(n.id);
       bindSummary(button, n);
-      if (folding && childIds(filtered, n.id).size) {
-        const toggle = el(
-          "button",
-          collapsed.has(n.id) ? "＋" : "−",
-          "table-toggle",
-        );
-        toggle.dataset.toggle = n.id;
-        toggle.dataset.source = "table";
-        toggle.setAttribute("aria-expanded", String(!collapsed.has(n.id)));
-        toggle.setAttribute(
-          "aria-label",
-          `${collapsed.has(n.id) ? "展开" : "收起"} ${n.title}`,
-        );
-        toggle.onclick = () => toggleNode(n.id, "table");
-        td.append(toggle);
-      }
       td.append(button, el("small", label(n)));
+      const sub = el("div", undefined, "list-prs");
+      for (const e of view.associations.filter((e) => e.to === n.id)) {
+        const pr = byId.get(e.from);
+        sub.append(workCard(pr, e));
+      }
+      if (sub.childNodes.length) td.append(sub);
       tr.append(
         td,
-        el("td", (n.assignees || []).join(", ") || "未指派 / 未知"),
+        el("td", (n.assignees || []).join(", ") || "未指派"),
         el("td", businessState(n)),
-        el("td", prerequisiteLabels[n.prerequisites] || "未知"),
+        el(
+          "td",
+          ["blocked", "unknown", "invalid", "needs_assessment"].includes(
+            n.prerequisites,
+          )
+            ? prerequisiteLabels[n.prerequisites]
+            : "",
+        ),
       );
       rows.append(tr);
-    });
+    }
     renderDetails();
     updateHealth();
   }
@@ -690,6 +714,7 @@
         "owner",
         data.nodes.flatMap((n) => n.assignees || []),
       );
+      $("owner").add(new Option("未指派", "__unassigned"));
       $("diagnostics-label").textContent =
         `采集诊断 · ${data.diagnostics.length} 项`;
       $("diagnostics").closest("details").hidden = !data.diagnostics.length;
@@ -717,44 +742,29 @@
       $("refresh").disabled = false;
     }
   }
-  ["relation", "repo", "owner", "state"].forEach(
-    (id) =>
-      ($(id).onchange = () => {
-        if (id === "relation") focus = null;
+  ["repo", "owner", "state"].forEach((id) => ($(id).onchange = render));
+  document.querySelectorAll(".scope-tab").forEach(
+    (b) =>
+      (b.onclick = () => {
+        document.querySelectorAll(".scope-tab").forEach((x) => {
+          x.classList.toggle("active", x === b);
+          x.setAttribute("aria-pressed", String(x === b));
+        });
         render();
       }),
   );
   $("search").oninput = render;
   $("refresh").onclick = load;
-  $("reset").onclick = () => {
-    focus = null;
-    render();
-  };
-  $("zoom-in").onclick = () => {
-    scale = Math.min(2, scale * 1.2);
-    applyScale();
-  };
-  $("zoom-out").onclick = () => {
-    scale = Math.max(0.25, scale / 1.2);
-    applyScale();
-  };
-  $("zoom-fit").onclick = () => {
-    if (drawing) {
-      scale = Math.max(
-        0.25,
-        Math.min(1, $("graph").clientWidth / drawing.width),
-      );
-      applyScale();
-    }
-  };
   $("expand-all").onclick = () => {
     collapsed.clear();
+    data.nodes.forEach((n) =>
+      expandedOwners.add((n.assignees || []).join(", ") || "未指派"),
+    );
     render();
   };
   $("collapse-all").onclick = () => {
-    collapsed = new Set(
-      data.edges.filter((e) => e.kind === "contains").map((e) => e.from),
-    );
+    collapsed = initialCollapsed(data);
+    expandedOwners.clear();
     render();
   };
   tooltip.onmouseenter = () => clearTimeout(summaryTimer);

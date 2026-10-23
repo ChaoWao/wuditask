@@ -23,13 +23,24 @@
         <strong id="health" role="status">正在读取…</strong>
       </section>
       <div class="toolbar">
-        <label
-          >关系视图<select id="relation">
-            <option value="contains">目标拆分</option>
-            <option value="blocks">阻塞依赖</option>
-            <option value="delivers">PR 交付</option>
-          </select></label
-        >
+        <nav class="scope-tabs" aria-label="工作范围">
+          <button
+            type="button"
+            class="scope-tab active"
+            data-scope="main"
+            aria-pressed="true"
+          >
+            重点工作 <span class="scope-count"></span>
+          </button>
+          <button
+            type="button"
+            class="scope-tab"
+            data-scope="other"
+            aria-pressed="false"
+          >
+            其他工作 <span class="scope-count"></span>
+          </button>
+        </nav>
         <label
           >仓库<select id="repo">
             <option value="">全部仓库</option>
@@ -56,7 +67,6 @@
             type="search"
             placeholder="标题 / 仓库 / 编号"
         /></label>
-        <button id="reset" type="button">清除聚焦</button>
       </div>
       <div id="tree-controls" class="tree-controls">
         <button id="expand-all" type="button" disabled>全部展开</button>
@@ -65,11 +75,6 @@
       <p id="caption" class="muted"></p>
       <div class="workspace">
         <section class="canvas-panel" aria-label="关系图">
-          <div class="zoom">
-            <button id="zoom-out" aria-label="缩小">−</button
-            ><button id="zoom-in" aria-label="放大">＋</button
-            ><button id="zoom-fit">适应宽度</button>
-          </div>
           <div id="graph" tabindex="0" aria-label="可滚动关系图"></div>
         </section>
         <aside id="details" aria-live="polite">

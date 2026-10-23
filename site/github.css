@@ -149,59 +149,9 @@ h2 {
   overflow: hidden;
   min-width: 0;
 }
-.zoom {
-  position: absolute;
-  right: 10px;
-  top: 10px;
-  display: flex;
-  gap: 4px;
-  z-index: 1;
-}
 #graph {
   height: 570px;
   overflow: auto;
-  background-image: radial-gradient(#d8e1e7 1px, transparent 1px);
-  background-size: 20px 20px;
-}
-#graph svg {
-  display: block;
-}
-.edge {
-  fill: none;
-  stroke: #9dabb9;
-  stroke-width: 1.6;
-}
-.node {
-  cursor: pointer;
-}
-.node rect {
-  fill: white;
-  stroke: #aabccc;
-  stroke-width: 1.4;
-}
-.node.selected rect {
-  stroke: var(--blue);
-  stroke-width: 3;
-}
-.node.boundary rect {
-  fill: #fff8e8;
-  stroke-dasharray: 5 3;
-}
-.node text {
-  fill: var(--ink);
-  font-family: inherit;
-}
-.node .label {
-  font-size: 12px;
-  font-weight: 700;
-  fill: var(--blue);
-}
-.node .title {
-  font-size: 13px;
-}
-.node .meta {
-  font-size: 11px;
-  fill: var(--muted);
 }
 aside {
   background: white;
@@ -308,8 +258,7 @@ footer a {
 }
 @media print {
   header button,
-  .toolbar,
-  .zoom {
+  .toolbar {
     display: none;
   }
   main {
@@ -349,26 +298,6 @@ footer a {
 button:disabled {
   opacity: 0.5;
   cursor: default;
-}
-.tree-toggle {
-  cursor: pointer;
-}
-.tree-toggle rect {
-  fill: #eaf1fb;
-  stroke: #aabccc;
-}
-.tree-toggle:hover rect {
-  fill: #d5e5fa;
-}
-.tree-toggle text {
-  fill: var(--blue);
-  font-size: 22px;
-  pointer-events: none;
-}
-td .table-toggle {
-  border: 1px solid var(--line);
-  padding: 0 7px;
-  margin-right: 8px;
 }
 .node-summary {
   position: fixed;
@@ -416,4 +345,111 @@ td .table-toggle {
 .summary-warning {
   border-left: 3px solid var(--amber);
   padding-left: 10px;
+}
+
+.scope-tabs {
+  display: flex;
+  gap: 6px;
+  margin-right: auto;
+  align-items: center;
+}
+.scope-tab.active {
+  background: #e7effd;
+  color: #285cc4;
+  border-color: #a5bce6;
+}
+.scope-count {
+  font-size: 12px;
+  margin-left: 4px;
+}
+#graph {
+  padding: 18px;
+  min-height: 320px;
+}
+.work-branch {
+  position: relative;
+}
+.work-children {
+  border-left: 1px solid #ced9e8;
+  margin-left: 18px;
+  padding-left: 18px;
+}
+.work-card {
+  position: relative;
+  border: 1px solid #dce3ed;
+  background: white;
+  border-radius: 8px;
+  padding: 12px 14px;
+  margin: 9px 0;
+}
+.work-card.selected {
+  border-color: #285cc4;
+  box-shadow: 0 0 0 1px #285cc4;
+}
+.work-card.pr {
+  background: #faf8ff;
+}
+.work-card.related {
+  border-style: dashed;
+  border-color: #a48ac5;
+}
+.work-card small {
+  display: block;
+  color: #61718a;
+  font-size: 12px;
+  margin-top: 5px;
+}
+.work-pick {
+  display: block;
+  text-align: left;
+  border: 0;
+  background: transparent;
+  font-weight: 600;
+  padding: 0;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  width: 100%;
+}
+.work-toggle {
+  float: right;
+  margin-left: 12px;
+  padding: 2px 8px;
+  position: relative;
+  z-index: 1;
+}
+.work-card:has(.work-toggle) .work-pick {
+  width: calc(100% - 48px);
+}
+.owner-group {
+  border: 1px solid #dce3ed;
+  border-radius: 8px;
+  padding: 14px;
+  margin: 10px 0;
+}
+.owner-group > summary {
+  cursor: pointer;
+  font-weight: 600;
+}
+.work-unit {
+  margin: 14px 0 24px;
+}
+.list-prs {
+  border-left: 2px solid #d5c9e8;
+  margin-top: 12px;
+  padding-left: 12px;
+}
+.list-prs .work-card {
+  font-size: 13px;
+}
+.table-scroll td {
+  vertical-align: top;
+}
+@media (max-width: 700px) {
+  .work-children {
+    margin-left: 6px;
+    padding-left: 10px;
+  }
+  .scope-tabs {
+    width: 100%;
+  }
 }

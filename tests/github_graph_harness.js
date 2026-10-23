@@ -235,3 +235,121 @@ const authorView = model.selectGraph(delivery, {
 assert.equal(authorView.nodes.length, 2);
 assert.equal(authorView.edges.length, 1);
 assert.deepEqual([...authorView.primary], ["pr"]);
+
+// Work units retain their PRs across owner filters, search, and both scopes.
+const business = {
+  roots: ["root"],
+  nodes: [
+    {
+      id: "root",
+      kind: "issue",
+      title: "Track",
+      repo: "acme/app",
+      number: 1,
+      state: "open",
+      assignees: ["alice"],
+    },
+    {
+      id: "inside",
+      kind: "issue",
+      title: "Feature",
+      repo: "acme/app",
+      number: 2,
+      state: "open",
+      assignees: ["alice"],
+    },
+    {
+      id: "outside",
+      kind: "issue",
+      title: "Bug",
+      repo: "acme/app",
+      number: 3,
+      state: "open",
+      assignees: ["bob"],
+    },
+    {
+      id: "p",
+      kind: "pr",
+      title: "Fix special",
+      repo: "acme/app",
+      number: 4,
+      state: "open",
+      assignees: ["carol"],
+    },
+    {
+      id: "standalone",
+      kind: "pr",
+      title: "Independent",
+      repo: "acme/app",
+      number: 5,
+      state: "open",
+      assignees: ["carol"],
+    },
+    {
+      id: "merged",
+      kind: "pr",
+      title: "Old fix",
+      repo: "acme/app",
+      number: 6,
+      state: "merged",
+      assignees: [],
+    },
+  ],
+  edges: [
+    { from: "root", to: "inside", kind: "contains" },
+    { from: "p", to: "inside", kind: "delivers" },
+    { from: "p", to: "outside", kind: "delivers" },
+    { from: "merged", to: "outside", kind: "delivers" },
+  ],
+};
+const ownerView = model.workGraph(business, {
+  scope: "other",
+  owner: "bob",
+  state: "active",
+});
+assert.deepEqual(
+  ownerView.units.map((n) => n.id),
+  ["outside"],
+);
+assert.deepEqual(
+  ownerView.nodes.map((n) => n.id),
+  ["outside", "p"],
+);
+assert.equal(ownerView.associations.length, 1);
+assert.deepEqual(
+  model
+    .workGraph(business, { scope: "main", search: "special", state: "active" })
+    .units.map((n) => n.id),
+  ["root", "inside"],
+);
+assert.deepEqual(
+  model
+    .workGraph(business, { scope: "other", search: "#4", state: "active" })
+    .units.map((n) => n.id),
+  ["outside"],
+);
+assert.ok(
+  !model
+    .workGraph(business, { scope: "other", state: "active" })
+    .units.some((n) => n.id === "p"),
+);
+assert.ok(
+  model
+    .workGraph(business, { scope: "other", state: "active" })
+    .units.some((n) => n.id === "standalone"),
+);
+const closedParent = structuredClone(business);
+closedParent.nodes.find((n) => n.id === "outside").state = "closed";
+assert.ok(
+  model
+    .workGraph(closedParent, { scope: "other", state: "active" })
+    .units.some((n) => n.id === "outside"),
+);
+assert.equal(
+  new Set(
+    model
+      .workGraph(business, { scope: "main", state: "active" })
+      .nodes.map((n) => n.id),
+  ).size,
+  3,
+);

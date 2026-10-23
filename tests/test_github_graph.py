@@ -68,6 +68,9 @@ class MemoryReader:
     def closing_prs(self, ref):
         return self.prs.get(ref.url, [])
 
+    def closing_issues(self, ref):
+        return self.prs.get(ref.url, [])
+
     def review_decision(self, ref):
         return "APPROVED"
 
