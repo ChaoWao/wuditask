@@ -408,3 +408,64 @@ footer a {
     display: none;
   }
 }
+
+[hidden] {
+  display: none !important;
+}
+.tree-controls {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+  margin-top: 14px;
+}
+button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+.tree-toggle {
+  cursor: pointer;
+}
+.tree-toggle rect {
+  fill: #eaf1fb;
+  stroke: #aabccc;
+}
+.tree-toggle:hover rect {
+  fill: #d5e5fa;
+}
+.tree-toggle text {
+  fill: var(--blue);
+  font-size: 22px;
+  pointer-events: none;
+}
+td .table-toggle {
+  border: 1px solid var(--line);
+  padding: 0 7px;
+  margin-right: 8px;
+}
+.node-summary {
+  position: fixed;
+  z-index: 20;
+  width: min(400px, calc(100vw - 24px));
+  max-height: calc(100vh - 24px);
+  overflow: auto;
+  padding: 14px 18px;
+  border: 1px solid #aabccc;
+  border-radius: 10px;
+  background: #fff;
+  box-shadow: 0 8px 32px #182c3c30;
+  font-size: 13px;
+  line-height: 1.7;
+  overflow-wrap: anywhere;
+}
+.node-summary strong {
+  display: block;
+  font-size: 15px;
+  margin: 5px 0 9px;
+}
+@media print {
+  .node-summary,
+  .tree-controls {
+    display: none;
+  }
+}

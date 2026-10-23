@@ -57,6 +57,7 @@
       : null;
     const matches = data.nodes.filter(
       (n) =>
+        (options.kind !== "contains" || n.kind !== "pr") &&
         (!options.repo || n.repo === options.repo) &&
         (!options.owner || (n.assignees || []).includes(options.owner)) &&
         (!options.state || n.state === options.state) &&
@@ -75,6 +76,88 @@
       edges: edges.filter((e) => ids.has(e.from) && ids.has(e.to)),
       primary,
     };
+  }
+  function childIds(data, id) {
+    return new Set(
+      data.edges
+        .filter((e) => e.kind === "contains" && e.from === id)
+        .map((e) => e.to),
+    );
+  }
+  function initialCollapsed(data) {
+    const edges = data.edges.filter((e) => e.kind === "contains");
+    const children = new Set(edges.map((e) => e.to));
+    return new Set(
+      edges.filter((e) => children.has(e.from)).map((e) => e.from),
+    );
+  }
+  function collapseGraph(view, collapsed) {
+    const incoming = new Set(view.edges.map((e) => e.to));
+    const next = new Map(view.nodes.map((n) => [n.id, []]));
+    view.edges.forEach((e) => next.get(e.from)?.push(e.to));
+    // Keep malformed cyclic components visible so folding cannot hide diagnostics.
+    const unresolved = layout(view.nodes, view.edges).unresolved;
+    const visible = new Set(unresolved);
+    const queue = view.nodes
+      .filter((n) => !incoming.has(n.id))
+      .map((n) => n.id);
+    for (let i = 0; i < queue.length; i++) {
+      const id = queue[i];
+      if (visible.has(id)) continue;
+      visible.add(id);
+      if (!collapsed.has(id)) queue.push(...(next.get(id) || []));
+    }
+    return {
+      nodes: view.nodes.filter((n) => visible.has(n.id)),
+      edges: view.edges.filter(
+        (e) =>
+          visible.has(e.from) &&
+          visible.has(e.to) &&
+          (!collapsed.has(e.from) || unresolved.has(e.from)),
+      ),
+      primary: new Set([...view.primary].filter((id) => visible.has(id))),
+    };
+  }
+  function nodeSummary(data, n) {
+    const ids = childIds(data, n.id);
+    const children = data.nodes.filter((c) => ids.has(c.id));
+    const completed = children.filter(
+      (c) => c.state === "closed" && c.state_reason === "completed",
+    ).length;
+    const lines = [
+      label(n),
+      n.title,
+      "负责人：" + ((n.assignees || []).join(", ") || "未指派 / 未知"),
+      "状态：" + businessState(n),
+      "前置：" + (prerequisiteLabels[n.prerequisites] || "未知"),
+    ];
+    if (n.kind === "issue") {
+      lines.push(
+        `直接子项：${completed} / ${ids.size} 已完成` +
+          (n.relations_complete?.contains === true
+            ? "（已采集）"
+            : "（关系未完整核实）"),
+      );
+      const prs = data.edges.filter(
+        (e) => e.kind === "delivers" && e.to === n.id,
+      );
+      lines.push(
+        `关联交付 PR：${prs.length}` +
+          (n.relations_complete?.delivers === true ? "" : "（关系未完整核实）"),
+      );
+    }
+    if (n.kind === "pr") {
+      const c = n.checks;
+      lines.push("审查：" + (n.review_decision || "未知"));
+      lines.push(
+        c
+          ? `当前 head 检查：${c.successful} 成功 / ${c.failed} 失败 / ${c.pending} 等待 / ${c.skipped} 跳过或中性`
+          : "当前 head 检查：未知",
+      );
+    }
+    if (n.errors?.length) lines.push("注意：存在采集错误，详情见右侧");
+    lines.push("来源更新：" + (n.updated_at || "未知"));
+    return lines;
   }
   function layout(nodes, edges) {
     const indegree = new Map(nodes.map((n) => [n.id, 0])),
@@ -129,6 +212,10 @@
       : data.status;
   }
   const model = {
+    childIds,
+    initialCollapsed,
+    collapseGraph,
+    nodeSummary,
     safeUrl,
     label,
     businessState,
@@ -146,7 +233,11 @@
     focus = null,
     scale = 1,
     drawing = null,
-    refreshFailed = false;
+    refreshFailed = false,
+    collapsed = null,
+    summaryAnchor = null,
+    summaryTimer = null;
+  const tooltip = $("node-summary");
   function el(tag, text, className) {
     const n = document.createElement(tag);
     if (text !== undefined) n.textContent = text;
@@ -170,6 +261,49 @@
       result += ch;
     }
     return result;
+  }
+  function hideSummary() {
+    clearTimeout(summaryTimer);
+    if (summaryAnchor) summaryAnchor.removeAttribute("aria-describedby");
+    summaryAnchor = null;
+    tooltip.hidden = true;
+  }
+  function deferHideSummary() {
+    clearTimeout(summaryTimer);
+    summaryTimer = setTimeout(hideSummary, 180);
+  }
+  function showSummary(n, anchor) {
+    hideSummary();
+    summaryAnchor = anchor;
+    tooltip.replaceChildren();
+    nodeSummary(data, n).forEach((line, i) =>
+      tooltip.append(el(i === 1 ? "strong" : "div", line)),
+    );
+    tooltip.hidden = false;
+    anchor.setAttribute("aria-describedby", "node-summary");
+    const rect = anchor.getBoundingClientRect();
+    const width = tooltip.offsetWidth,
+      height = tooltip.offsetHeight;
+    let left = rect.right + 10;
+    if (left + width > window.innerWidth - 12) left = rect.left - width - 10;
+    tooltip.style.left = Math.max(12, left) + "px";
+    tooltip.style.top =
+      Math.max(12, Math.min(rect.top, window.innerHeight - height - 12)) + "px";
+  }
+  function bindSummary(anchor, n) {
+    anchor.onmouseenter = () => showSummary(n, anchor);
+    anchor.onmouseleave = deferHideSummary;
+    anchor.onfocus = () => showSummary(n, anchor);
+    anchor.onblur = deferHideSummary;
+  }
+  function toggleNode(id, source) {
+    if (collapsed.has(id)) collapsed.delete(id);
+    else collapsed.add(id);
+    render();
+    // Rendering replaces the SVG/table; keep keyboard navigation at the toggle.
+    [...document.querySelectorAll("[data-toggle]")]
+      .find((n) => n.dataset.toggle === id && n.dataset.source === source)
+      ?.focus();
   }
   function updateHealth() {
     if (!data) return;
@@ -294,13 +428,31 @@
       search: $("search").value,
       focus,
     };
-    const view = selectGraph(data, options),
+    hideSummary();
+    const filtered = selectGraph(data, options);
+    const filtering = Boolean(
+      options.repo ||
+      options.owner ||
+      options.state ||
+      options.search ||
+      options.focus,
+    );
+    const folding = options.kind === "contains" && !filtering;
+    const view = folding ? collapseGraph(filtered, collapsed) : filtered,
       diagram = layout(view.nodes, view.edges),
       canvas = $("graph");
     canvas.replaceChildren();
+    $("tree-controls").hidden = options.kind !== "contains";
+    $("expand-all").disabled = $("collapse-all").disabled = !folding;
+    $("tree-hint").textContent = filtering
+      ? "筛选 / 聚焦时自动展开匹配路径；清除后恢复折叠状态。"
+      : "点击 ＋ / − 展开收起；悬停或键盘聚焦查看摘要。";
     $("caption").textContent =
       names[options.kind] +
       ` · ${view.primary.size} 个匹配任务，${view.nodes.length - view.primary.size} 个前置边界，${view.edges.length} 条关系` +
+      (folding
+        ? ` · 已收起 ${filtered.nodes.length - view.nodes.length} 个节点`
+        : "") +
       (diagram.unresolved.size ? " · 有环或受环影响的节点，不能视为 DAG" : "");
     if (!view.nodes.length) {
       canvas.append(
@@ -353,11 +505,11 @@
           role: "button",
           tabindex: 0,
           "aria-label": label(n) + " " + n.title,
+          "data-node": n.id,
         });
         g.append(
-          svg("title", {}, label(n) + "\n" + n.title),
           svg("rect", { width: 280, height: 94, rx: 7 }),
-          svg("text", { x: 13, y: 22, class: "label" }, trim(label(n), 36)),
+          svg("text", { x: 13, y: 22, class: "label" }, trim(label(n), 30)),
           svg("text", { x: 13, y: 46, class: "title" }, trim(n.title, 28)),
           svg(
             "text",
@@ -375,6 +527,7 @@
             ),
           ),
         );
+        bindSummary(g, n);
         g.onclick = () => choose(n.id);
         g.onkeydown = (event) => {
           if (event.key === "Enter" || event.key === " ") {
@@ -383,6 +536,35 @@
           }
         };
         root.append(g);
+        const count = childIds(data, n.id).size;
+        if (folding && count) {
+          const toggle = svg("g", {
+            transform: `translate(${pos.x + 246},${pos.y + 4})`,
+            class: "tree-toggle",
+            role: "button",
+            tabindex: 0,
+            "data-toggle": n.id,
+            "data-source": "graph",
+            "aria-expanded": !collapsed.has(n.id),
+            "aria-label": `${collapsed.has(n.id) ? "展开" : "收起"} ${n.title} 的 ${count} 个直接子项`,
+          });
+          toggle.append(
+            svg("rect", { width: 30, height: 26, rx: 5 }),
+            svg(
+              "text",
+              { x: 15, y: 19, "text-anchor": "middle" },
+              collapsed.has(n.id) ? "+" : "−",
+            ),
+          );
+          toggle.onclick = () => toggleNode(n.id, "graph");
+          toggle.onkeydown = (event) => {
+            if (event.key === "Enter" || event.key === " ") {
+              event.preventDefault();
+              toggleNode(n.id, "graph");
+            }
+          };
+          root.append(toggle);
+        }
       });
       canvas.append(root);
       drawing = { svg: root, width: diagram.width, height: diagram.height };
@@ -395,6 +577,23 @@
         td = el("td"),
         button = el("button", n.title);
       button.onclick = () => choose(n.id);
+      bindSummary(button, n);
+      if (folding && childIds(data, n.id).size) {
+        const toggle = el(
+          "button",
+          collapsed.has(n.id) ? "＋" : "−",
+          "table-toggle",
+        );
+        toggle.dataset.toggle = n.id;
+        toggle.dataset.source = "table";
+        toggle.setAttribute("aria-expanded", String(!collapsed.has(n.id)));
+        toggle.setAttribute(
+          "aria-label",
+          `${collapsed.has(n.id) ? "展开" : "收起"} ${n.title}`,
+        );
+        toggle.onclick = () => toggleNode(n.id, "table");
+        td.append(toggle);
+      }
       td.append(button, el("small", label(n)));
       tr.append(
         td,
@@ -420,6 +619,7 @@
       )
         throw new Error("invalid_snapshot");
       data = next;
+      if (collapsed === null) collapsed = initialCollapsed(data);
       refreshFailed = false;
       fillFilter("repo", data.nodes.map((n) => n.repo).filter(Boolean));
       fillFilter(
@@ -493,6 +693,23 @@
       applyScale();
     }
   };
+  $("expand-all").onclick = () => {
+    collapsed.clear();
+    render();
+  };
+  $("collapse-all").onclick = () => {
+    collapsed = new Set(
+      data.edges.filter((e) => e.kind === "contains").map((e) => e.from),
+    );
+    render();
+  };
+  tooltip.onmouseenter = () => clearTimeout(summaryTimer);
+  tooltip.onmouseleave = deferHideSummary;
+  document.addEventListener("keydown", (event) => {
+    if (event.key === "Escape") hideSummary();
+  });
+  $("graph").addEventListener("scroll", hideSummary);
+  window.addEventListener("resize", hideSummary);
   setInterval(updateHealth, 30000);
   load();
 })();

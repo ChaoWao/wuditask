@@ -75,6 +75,11 @@
         /></label>
         <button id="reset" type="button">清除聚焦</button>
       </div>
+      <div id="tree-controls" class="tree-controls">
+        <button id="expand-all" type="button" disabled>全部展开</button>
+        <button id="collapse-all" type="button" disabled>全部收起</button>
+        <span id="tree-hint" class="muted"></span>
+      </div>
       <p id="caption" class="muted"></p>
       <div class="workspace">
         <section class="canvas-panel" aria-label="关系图">
@@ -122,6 +127,7 @@
       WudiTask · 业务事实由 GitHub 维护 · 无需 WDT 登记或二次归档
       <a href="graph.json">原始快照</a>
     </footer>
+    <div id="node-summary" class="node-summary" role="tooltip" hidden></div>
     <script src="github.js"></script>
   </body>
 </html>

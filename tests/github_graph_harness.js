@@ -77,3 +77,81 @@ assert.equal(
 console.log(
   "Business graph filters, boundaries, cycles, safe links and age checks passed.",
 );
+
+// Folding follows open paths, including shared children in a DAG.
+const tree = {
+  nodes: ["r", "a", "b", "c", "leaf", "pr"].map((id) => ({
+    id,
+    kind: id === "pr" ? "pr" : "issue",
+  })),
+  edges: [
+    ["r", "a"],
+    ["r", "b"],
+    ["a", "c"],
+    ["b", "c"],
+    ["c", "leaf"],
+  ].map(([from, to]) => ({ from, to, kind: "contains" })),
+};
+const all = model.selectGraph(tree, { kind: "contains" });
+assert.deepEqual([...model.initialCollapsed(tree)].sort(), ["a", "b", "c"]);
+assert.deepEqual(
+  model.collapseGraph(all, model.initialCollapsed(tree)).nodes.map((n) => n.id),
+  ["r", "a", "b"],
+);
+assert.deepEqual(
+  model.collapseGraph(all, new Set(["a"])).nodes.map((n) => n.id),
+  ["r", "a", "b", "c", "leaf"],
+);
+assert.deepEqual(
+  model.collapseGraph(all, new Set(["r"])).nodes.map((n) => n.id),
+  ["r"],
+);
+assert.equal(model.collapseGraph(all, new Set()).nodes.length, 5);
+assert.deepEqual(
+  model.collapseGraph(
+    model.selectGraph(tree, { kind: "contains", search: "no-match" }),
+    new Set(),
+  ).nodes,
+  [],
+);
+const cyclic = model.selectGraph(
+  {
+    ...tree,
+    edges: [...tree.edges, { from: "leaf", to: "c", kind: "contains" }],
+  },
+  { kind: "contains" },
+);
+assert.ok(
+  model.collapseGraph(cyclic, new Set(["r"])).nodes.some((n) => n.id === "c"),
+);
+const summaryRoot = {
+  id: "r",
+  kind: "issue",
+  title: "<img src=x>",
+  state: "open",
+  assignees: ["alice"],
+  prerequisites: "blocked",
+  relations_complete: { contains: true, delivers: true },
+};
+const summary = model.nodeSummary(
+  {
+    nodes: [
+      summaryRoot,
+      { id: "a", state: "closed", state_reason: "completed" },
+      { id: "b", state: "closed", state_reason: "not_planned" },
+    ],
+    edges: tree.edges,
+  },
+  summaryRoot,
+);
+assert.ok(summary.includes("<img src=x>"));
+assert.ok(summary.includes("直接子项：1 / 2 已完成（已采集）"));
+assert.ok(summary.includes("前置：前置未完成"));
+assert.ok(
+  model
+    .nodeSummary({ nodes: [], edges: [] }, { kind: "boundary" })
+    .includes("负责人：未指派 / 未知"),
+);
+console.log(
+  "Collapsing trees, shared children, cycles and factual summaries passed.",
+);
