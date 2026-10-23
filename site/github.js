@@ -28,6 +28,25 @@
       ? n.repo + (n.kind === "pr" ? " PR #" : " #") + n.number
       : "受限 / 未知引用";
   }
+  function people(n) {
+    return n.kind === "pr" ? (n.author ? [n.author] : []) : n.assignees || [];
+  }
+  function peopleLabel(n) {
+    return n.kind === "pr" ? "作者" : "负责人";
+  }
+  function peopleText(n) {
+    return (
+      people(n).join(", ") || (n.kind === "pr" ? "作者未知" : "未指派 / 未知")
+    );
+  }
+  function ownerMatch(n, owner) {
+    return (
+      !owner ||
+      (owner === "__unassigned"
+        ? n.kind === "issue" && !people(n).length
+        : people(n).includes(owner))
+    );
+  }
   function businessState(n) {
     return n.state === "closed"
       ? "Closed · " + (n.state_reason || "原因未知")
@@ -63,7 +82,7 @@
       (n) =>
         (options.kind !== "contains" || n.kind !== "pr") &&
         (!options.repo || n.repo === options.repo) &&
-        (!options.owner || (n.assignees || []).includes(options.owner)) &&
+        ownerMatch(n, options.owner) &&
         (!options.state ||
           (options.state === "active"
             ? !isTerminal(n)
@@ -112,7 +131,7 @@
       (options.state === "active" ? !isTerminal(n) : n.state === options.state);
     const textMatch = (n) =>
       !options.search ||
-      (label(n) + " " + n.title + " " + (n.assignees || []).join(" "))
+      (label(n) + " " + n.title + " " + people(n).join(" "))
         .toLowerCase()
         .includes(options.search.toLowerCase().replace(/^#/, ""));
     const associated = (id) =>
@@ -126,10 +145,7 @@
           (n) =>
             inScope(n) &&
             (!options.repo || n.repo === options.repo) &&
-            (!options.owner ||
-              (options.owner === "__unassigned"
-                ? !(n.assignees || []).length
-                : (n.assignees || []).includes(options.owner))) &&
+            ownerMatch(n, options.owner) &&
             [n, ...associated(n.id)].some(stateMatch) &&
             [n, ...associated(n.id).filter(stateMatch)].some(textMatch),
         )
@@ -216,11 +232,7 @@
     const completed = children.filter(
       (c) => c.state === "closed" && c.state_reason === "completed",
     ).length;
-    const lines = [
-      label(n),
-      n.title,
-      "负责人：" + ((n.assignees || []).join(", ") || "未指派 / 未知"),
-    ];
+    const lines = [label(n), n.title, peopleLabel(n) + "：" + peopleText(n)];
     for (const [key, title] of [
       ["goal", "目标"],
       ["progress", "进展"],
@@ -488,7 +500,7 @@
     const list = el("dl");
     const fields = [
       ["业务状态", businessState(n)],
-      ["负责人", (n.assignees || []).join(", ") || "未指派"],
+      [peopleLabel(n), peopleText(n)],
       ["前置条件", prerequisiteLabels[n.prerequisites] || "未知"],
       ["来源更新时间", n.updated_at || "未知"],
       ["本次观察时间", n.observed_at || "未知"],
@@ -545,10 +557,7 @@
     const button = el("button", n.title, "work-pick");
     button.onclick = () => choose(n.id);
     bindSummary(button, n);
-    const meta = el(
-      "small",
-      label(n) + " · " + ((n.assignees || []).join(", ") || "未指派"),
-    );
+    const meta = el("small", label(n) + " · " + peopleText(n));
     card.append(button, meta);
     if (isTerminal(n)) card.append(el("small", businessState(n)));
     if (edge && edge.kind !== "contains")
@@ -636,11 +645,7 @@
         svg("rect", { width: 280, height: 94, rx: 7 }),
         svg("text", { x: 13, y: 22, class: "label" }, trim(label(n), 30)),
         svg("text", { x: 13, y: 46, class: "title" }, trim(n.title, 28)),
-        svg(
-          "text",
-          { x: 13, y: 67, class: "meta" },
-          trim((n.assignees || []).join(", ") || "未指派 / 未知", 36),
-        ),
+        svg("text", { x: 13, y: 67, class: "meta" }, trim(peopleText(n), 36)),
         svg(
           "text",
           { x: 13, y: 84, class: "meta" },
@@ -734,7 +739,7 @@
     } else {
       const groups = new Map();
       for (const n of view.units) {
-        const owner = (n.assignees || []).join(", ") || "未指派";
+        const owner = peopleText(n);
         if (!groups.has(owner)) groups.set(owner, []);
         groups.get(owner).push(n);
       }
@@ -779,7 +784,7 @@
       if (sub.childNodes.length) td.append(sub);
       tr.append(
         td,
-        el("td", (n.assignees || []).join(", ") || "未指派"),
+        el("td", peopleText(n)),
         el("td", businessState(n)),
         el(
           "td",
@@ -814,11 +819,8 @@
       fillFilter("repo", repos);
       $("repo").closest("label").hidden = repos.length <= 1;
       if (repos.length <= 1) $("repo").value = "";
-      fillFilter(
-        "owner",
-        data.nodes.flatMap((n) => n.assignees || []),
-      );
-      $("owner").add(new Option("未指派", "__unassigned"));
+      fillFilter("owner", data.nodes.flatMap(people));
+      $("owner").add(new Option("Issue 未指派", "__unassigned"));
       $("diagnostics-label").textContent =
         `采集诊断 · ${data.diagnostics.length} 项`;
       $("diagnostics").closest("details").hidden = !data.diagnostics.length;
@@ -878,9 +880,7 @@
   };
   $("expand-all").onclick = () => {
     collapsed.clear();
-    data.nodes.forEach((n) =>
-      expandedOwners.add((n.assignees || []).join(", ") || "未指派"),
-    );
+    data.nodes.forEach((n) => expandedOwners.add(peopleText(n)));
     render();
   };
   $("collapse-all").onclick = () => {

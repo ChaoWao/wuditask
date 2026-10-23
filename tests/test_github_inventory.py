@@ -18,6 +18,23 @@ def pr(n, **fields):
 
 
 class InventoryTests(unittest.TestCase):
+    def test_pr_author_is_separate_from_assignee_and_committer(self):
+        for user in ({"login": "writer"}, None):
+            with self.subTest(user=user):
+                reader = MemoryReader()
+                value = pr(
+                    3,
+                    user=user,
+                    assignees=[{"login": "reviewer"}],
+                    committer={"login": "integrator"},
+                )
+                reader.add(value)
+                reader.relations["repos/acme/service/issues?state=open"] = [value]
+                result = node(snapshot(reader, repositories=("acme/service",)), 3)
+                self.assertEqual(result["author"], "writer" if user else None)
+                self.assertEqual(result["owner_resolution"], "not_applicable")
+                self.assertNotIn("committer", result)
+
     def test_inventory_outside_root_and_reverse_link(self):
         reader = MemoryReader()
         reader.add(issue(2, state="closed"))

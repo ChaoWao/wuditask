@@ -222,7 +222,13 @@ assert.ok(
 
 const delivery = {
   nodes: [
-    { id: "pr", kind: "pr", state: "open", assignees: ["author"] },
+    {
+      id: "pr",
+      kind: "pr",
+      state: "open",
+      author: "author",
+      assignees: ["reviewer"],
+    },
     { id: "issue", kind: "issue", state: "open", assignees: ["owner"] },
   ],
   edges: [{ from: "pr", to: "issue", kind: "delivers" }],
@@ -274,7 +280,8 @@ const business = {
       repo: "acme/app",
       number: 4,
       state: "open",
-      assignees: ["carol"],
+      author: "carol",
+      assignees: ["reviewer"],
     },
     {
       id: "standalone",
@@ -283,7 +290,8 @@ const business = {
       repo: "acme/app",
       number: 5,
       state: "open",
-      assignees: ["carol"],
+      author: "carol",
+      assignees: ["reviewer"],
     },
     {
       id: "merged",
@@ -352,4 +360,32 @@ assert.equal(
       .nodes.map((n) => n.id),
   ).size,
   3,
+);
+
+// PR authors remain visible without assignees; no fallback to reviewer/committer.
+const standalone = business.nodes.find((n) => n.id === "standalone");
+standalone.assignees = [];
+assert.ok(model.nodeSummary(business, standalone).includes("作者：carol"));
+assert.ok(
+  !model.nodeSummary(business, standalone).join(" ").includes("未指派"),
+);
+assert.deepEqual(
+  model
+    .workGraph(business, { scope: "other", owner: "carol" })
+    .units.map((n) => n.id),
+  ["standalone"],
+);
+assert.deepEqual(
+  model.workGraph(business, { scope: "other", owner: "reviewer" }).units,
+  [],
+);
+assert.deepEqual(
+  model.workGraph(business, { scope: "other", owner: "__unassigned" }).units,
+  [],
+);
+standalone.author = null;
+assert.ok(model.nodeSummary(business, standalone).includes("作者：作者未知"));
+assert.deepEqual(
+  model.workGraph(business, { scope: "other", owner: "__unassigned" }).units,
+  [],
 );

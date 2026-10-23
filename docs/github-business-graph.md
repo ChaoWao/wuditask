@@ -51,7 +51,7 @@ API 分页完整读取，网络/权限/GraphQL 部分错误按字段暴露，错
 
 - **重点工作**：沿用 SVG DAG 图，配置根 Issue 的子任务与关联 PR 以节点连线展示；
   支持缩放、适应宽度及逐节点展开/收起。正式关联使用实线，正文关联使用虚线。
-- **其他工作**：未归入重点工作的 Issue 以及无关联 PR，按 GitHub assignee 分组。
+- **其他工作**：未归入重点工作的 Issue 以及无关联 PR，Issue 按 GitHub assignee、独立 PR 按作者分组。
   分组仅用于阅读，不创建 GitHub 层级，不从 PR 作者推断负责人。
 - 图与列表都以 Issue 为主项，关联 PR 作为子项。一个 PR 可关联多个 Issue，
   每个目标下可见，关联 PR 数量按身份去重；PR 不在另一个负责人分组重复作为独立工作。
@@ -72,7 +72,8 @@ API 分页完整读取，网络/权限/GraphQL 部分错误按字段暴露，错
 - 默认“未完成”支持折叠；筛选时展开命中路径，清除后恢复折叠状态。
 - 支持仓库、负责人、状态、标题筛选，单仓隐藏仓库筛选。
 - Issue 的唯一 assignee 是可解析负责人；零或多个分别显示 unassigned/conflict，
-  不从 PR 作者静默推断 Issue owner。PR 同样展示 assignees，不自动改派。
+  不从 PR 作者静默推断 Issue owner。PR 展示 GitHub PR 作者（`user.login`），不使用 assignee 或 commit 的 committer；作者缺失显示未知，不提示未指派。
+  人员筛选、分组、摘要和列表遵循相同规则；“Issue 未指派”只筛选 Issue。关联 PR 仍随 Issue 展示，不从作者反推 Issue 负责人。
 - PR 详情包含观察到的 head SHA、审查结论和该提交的 check/status 统计；不把
   “所有 checks 成功”当作仓库分支保护全部满足，也不宣称自动可合入。
 

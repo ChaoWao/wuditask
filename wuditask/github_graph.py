@@ -457,7 +457,9 @@ def collect_graph(scope: GraphScope, reader: GitHubReader | None = None) -> dict
                 "state": state,
                 "state_reason": raw.get("state_reason"),
                 "assignees": assignees,
-                "owner_resolution": "unique"
+                "owner_resolution": "not_applicable"
+                if ref.kind == "pr"
+                else "unique"
                 if len(assignees) == 1
                 else "unassigned"
                 if not assignees
@@ -467,6 +469,8 @@ def collect_graph(scope: GraphScope, reader: GitHubReader | None = None) -> dict
                 "relations_complete": {},
                 "errors": [],
             }
+            if ref.kind == "pr":
+                node["author"] = (raw.get("user") or {}).get("login")
             nodes[key] = node
             if ref.kind == "issue":
                 relation_reads = [
