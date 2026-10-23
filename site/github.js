@@ -50,6 +50,9 @@
         }
     return ids;
   }
+  function isTerminal(n) {
+    return n.state === "closed" || n.state === "merged";
+  }
   function selectGraph(data, options) {
     const edges = data.edges.filter((e) => e.kind === options.kind);
     const focus = options.focus
@@ -60,7 +63,10 @@
         (options.kind !== "contains" || n.kind !== "pr") &&
         (!options.repo || n.repo === options.repo) &&
         (!options.owner || (n.assignees || []).includes(options.owner)) &&
-        (!options.state || n.state === options.state) &&
+        (!options.state ||
+          (options.state === "active"
+            ? !isTerminal(n)
+            : n.state === options.state)) &&
         (!options.search ||
           (label(n) + " " + n.title)
             .toLowerCase()
@@ -68,9 +74,12 @@
         (!focus || focus.has(n.id)),
     );
     const primary = new Set(matches.map((n) => n.id));
-    // Keep upstream boundaries even when a filter hides their repository or state.
+    // Retain upstream context for explicit filters; the working view hides terminal
+    // nodes even at boundaries. Full relationships remain available in details.
     const ids = closure(primary, edges, "up");
     if (focus) for (const id of ids) if (!focus.has(id)) ids.delete(id);
+    if (options.state === "active")
+      for (const n of data.nodes) if (isTerminal(n)) ids.delete(n.id);
     return {
       nodes: data.nodes.filter((n) => ids.has(n.id)),
       edges: edges.filter((e) => ids.has(e.from) && ids.has(e.to)),
@@ -433,7 +442,7 @@
     const filtering = Boolean(
       options.repo ||
       options.owner ||
-      options.state ||
+      (options.state && options.state !== "active") ||
       options.search ||
       options.focus,
     );
@@ -450,6 +459,9 @@
     $("caption").textContent =
       names[options.kind] +
       ` · ${view.primary.size} 个匹配任务，${view.nodes.length - view.primary.size} 个前置边界，${view.edges.length} 条关系` +
+      (options.state === "active"
+        ? " · 已隐藏 Closed / Merged，历史关系见详情"
+        : "") +
       (folding
         ? ` · 已收起 ${filtered.nodes.length - view.nodes.length} 个节点`
         : "") +
@@ -536,7 +548,7 @@
           }
         };
         root.append(g);
-        const count = childIds(data, n.id).size;
+        const count = childIds(filtered, n.id).size;
         if (folding && count) {
           const toggle = svg("g", {
             transform: `translate(${pos.x + 246},${pos.y + 4})`,
@@ -578,7 +590,7 @@
         button = el("button", n.title);
       button.onclick = () => choose(n.id);
       bindSummary(button, n);
-      if (folding && childIds(data, n.id).size) {
+      if (folding && childIds(filtered, n.id).size) {
         const toggle = el(
           "button",
           collapsed.has(n.id) ? "＋" : "−",

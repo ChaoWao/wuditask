@@ -155,3 +155,44 @@ assert.ok(
 console.log(
   "Collapsing trees, shared children, cycles and factual summaries passed.",
 );
+
+const activeData = {
+  nodes: [
+    { id: "done", kind: "issue", state: "closed" },
+    { id: "open", kind: "issue", state: "open" },
+    {
+      id: "cancelled",
+      kind: "issue",
+      state: "closed",
+      state_reason: "not_planned",
+    },
+    { id: "merged", kind: "pr", state: "merged" },
+    { id: "unknown", kind: "boundary", state: "unknown" },
+  ],
+  edges: [
+    { from: "done", to: "open", kind: "contains" },
+    { from: "done", to: "open", kind: "blocks" },
+    { from: "unknown", to: "open", kind: "blocks" },
+    { from: "merged", to: "open", kind: "delivers" },
+  ],
+};
+for (const kind of ["contains", "blocks", "delivers"]) {
+  const active = model.selectGraph(activeData, { kind, state: "active" });
+  assert.deepEqual(
+    active.nodes.map((n) => n.id),
+    ["open", "unknown"],
+  );
+  assert.ok(active.edges.every((e) => e.from === "unknown" && e.to === "open"));
+  assert.ok(
+    model
+      .collapseGraph(active, new Set(["done"]))
+      .nodes.some((n) => n.id === "open"),
+  );
+}
+assert.equal(
+  model.selectGraph(activeData, { kind: "blocks", state: "" }).nodes.length,
+  5,
+);
+console.log(
+  "Active view hides terminal boundaries, retains open descendants and unknowns, and permits history.",
+);
