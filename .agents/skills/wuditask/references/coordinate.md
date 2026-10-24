@@ -27,6 +27,10 @@ second copy of itself. `coord guard --session JOURNAL -- HOST_COMMAND` is option
 foreground host you are launching. It holds a local lock and permits one launch per journal;
 it does not kill the old host after takeover or automatically end the execution record.
 
+After a successful claim, follow [main-agent workflow](main-agent.md) to agree the delivery,
+build the local DAG and manage delegated work. Each plan binds this journal; children share
+its task authority. On resume, reconcile the existing plan before dispatching again.
+
 ## Continue here / take over
 
 An explicit user request such as “在这里继续”, “接管”, or “旧机器不用管，继续做” authorizes
@@ -43,7 +47,8 @@ replacement. Do not ask for stop proof or ask the same permission again. If inte
 
 3. Reuse this exact command/journal on uncertain responses. If `takeover_conflict` reports
    a changed run, inspect and report it; do not loop by targeting each new successor.
-4. Verify code/workspace state before resuming. Best-effort notify/cancel the old execution
+4. Use `work adopt` for an accessible old internal plan; revalidate its evidence and approval.
+   Keep old live writers isolated. Verify code/workspace state before resuming. Best-effort notify/cancel the old execution
    through available authorized host controls, but do not make stop confirmation a gate.
    Explain that old processes may still finish pending writes. Never kill unrelated processes.
 

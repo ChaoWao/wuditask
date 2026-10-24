@@ -51,6 +51,8 @@ wuditask help
 
 `$wuditask` 读取 Issue/PR 后按已有约定领取。默认拒绝本账号重复开工；你明确要求接管时无需停止证明，旧 run 在下次检查后停止新工作。系统不强制杀旧进程，已发出的外部操作仍可能完成。
 
+领取后，主 agent 可通过同一入口建立本地 DAG 和 HTML 看板，派发 Codex/Claude 子 agent、验收结果并推进完整 PR。宿主没有可靠唤醒能力时，需手动继续原任务收取结果，不承诺后台自动续办。
+
 暂停和完成只结束本次执行并保存摘要，不自动关闭 Issue。业务进展、设计和验收继续记录在 GitHub。
 
 完整入口：[统一 skill 与升级流程](https://github.com/ChaoWao/wuditask/blob/main/.agents/skills/wuditask/SKILL.md)。工具源码：[WudiTask 工具仓](https://github.com/ChaoWao/wuditask)。

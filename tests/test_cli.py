@@ -983,7 +983,7 @@ class CliTests(unittest.TestCase):
             text=True,
         )
         self.assertEqual(0, version.returncode, version.stderr)
-        self.assertEqual("wuditask 0.8.0", version.stdout.strip())
+        self.assertEqual("wuditask 0.9.0", version.stdout.strip())
 
 
 if __name__ == "__main__":

@@ -68,7 +68,12 @@ python3 TOOL/tools/wuditask.py --json coord upgrade
 用户明确要求即可接管。旧进程不被强制终止，已发出的操作可能继续完成。
 
 GitHub 是业务唯一台账；执行仓只存执行与恢复记录。详见 [个人协调协议](docs/personal-coordination.md)。
-**Part 3** 的内部 DAG、子 agent 调度和自动停止仍独立推进。
+**Part 3** 已提供本地任务 DAG、Codex 原生交接、Claude/Codex 进程监督、结果收件与验收、
+HTML 看板及合入门槛。主 agent 先与用户对齐完整功能，再并行派发互不冲突的子项；
+子 agent 结束只产生候选结果，主 agent 审查后才解锁后续。
+
+仍使用 `$wuditask`，不需要登记另一份业务任务。详见 [任务内工作流](docs/main-agent-workflow.md)。
+未配置并验证宿主唤醒时，需要继续原任务来接收结果；工具不会自动杀进程或替用户合入。
 
 ## 开发验证
 

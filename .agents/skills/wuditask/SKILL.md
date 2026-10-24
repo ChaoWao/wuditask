@@ -1,6 +1,6 @@
 ---
 name: wuditask
-description: Use WudiTask for GitHub work overview, personal cross-machine task coordination, installation, upgrade, or tool maintenance. One entry for upgrading an old two-repository installation, starting a task, taking over here, saving progress and finishing. GitHub remains the business record.
+description: Use WudiTask for GitHub work overview, personal cross-machine task coordination, internal task planning, multi-agent delivery, installation, upgrade, or tool maintenance. One entry for upgrading an old two-repository installation, starting a task, taking over here, saving progress and finishing. GitHub remains the business record.
 ---
 
 # WudiTask
@@ -35,6 +35,17 @@ execution repository; all machines of one account use the same branch. Default a
 prevents duplicate designated runs. Explicit user takeover replaces the observed run
 without stop proof; it does not kill processes or retract pending external writes.
 Check current rights before starting work and controlled external writes.
+
+## Plan and deliver inside the task
+
+After goal alignment and acquisition, follow [main-agent workflow](references/main-agent.md)
+for a multi-step goal: complete delivery units, typed internal DAG, concrete design decisions,
+conflict-aware delegation, durable results, manager acceptance and current-head PR gates.
+Reuse existing approvals; a simple edit does not need artificial decomposition.
+Subagents are implementation helpers under the main agent, not new GitHub owners or S2 claims.
+Use native Codex events when available or supervised Claude processes; inspect the saved inbox
+on resume. Without a verified host wake bridge, explicitly report manual resume rather than
+promise unattended continuation. Never accept a child result merely because it finished.
 
 ## Fix WudiTask itself
 
