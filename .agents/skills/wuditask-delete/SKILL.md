@@ -1,11 +1,14 @@
 ---
 name: wuditask-delete
-description: Delete one or more explicitly identified erroneous archived WudiTask records as a guarded atomic Hub update. Use only when the user asks to remove mistakenly created, duplicate, test, or otherwise invalid archived tasks; do not use for ordinary completion, cancellation, history cleanup, or sensitive-data erasure.
+description: Legacy queue maintenance only. Delete one or more explicitly identified erroneous archived WudiTask records as a guarded atomic Hub update. Use only when the user asks to remove mistakenly created, duplicate, test, or otherwise invalid archived tasks; do not use for ordinary completion, cancellation, history cleanup, or sensitive-data erasure.
 ---
 
 # Delete Archived WudiTasks
 
 Use the registered WudiTask CLI. Never edit or remove task JSON directly.
+
+> This skill is for the legacy queue. For direct GitHub task work and personal
+> takeover/handoff, use [wuditask-coordinate](../wuditask-coordinate/SKILL.md).
 
 ## Confirm the deletion request
 

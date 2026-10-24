@@ -19,6 +19,7 @@ EXPECTED_SKILLS = {
     "wuditask-archive",
     "wuditask-assign",
     "wuditask-check",
+    "wuditask-coordinate",
     "wuditask-delete",
     "wuditask-execute",
     "wuditask-install",

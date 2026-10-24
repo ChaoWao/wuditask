@@ -1,11 +1,14 @@
 ---
 name: wuditask-add
-description: Add a GitHub-backed item to the shared WudiTask queue. Use when work needs queue priority or cross-repository dependencies after one canonical GitHub Issue or pull request already contains the complete narrative and acceptance requirements.
+description: Legacy queue maintenance only. Add a GitHub-backed item to the shared WudiTask queue. Use when work needs queue priority or cross-repository dependencies after one canonical GitHub Issue or pull request already contains the complete narrative and acceptance requirements.
 ---
 
 # Add a WudiTask
 
 Use the registered CLI for the Hub mutation. Never edit task JSON directly.
+
+> This skill is for the legacy queue. For direct GitHub task work and personal
+> takeover/handoff, use [wuditask-coordinate](../wuditask-coordinate/SKILL.md).
 
 ## Locate the installation
 

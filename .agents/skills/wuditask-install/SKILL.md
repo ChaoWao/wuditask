@@ -8,6 +8,14 @@ description: Register the complete WudiTask skill suite and CLI symlinks from a 
 Register the tool clone through its Python installer. Do not pip/npm install it
 and do not copy skill files manually.
 
+## Personal coordination (preferred for new setups)
+
+Use the unified personal coordination skill `$wuditask-coordinate` for task work.
+For a new setup, run `coord setup --remote REMOTE --branch personal-execution` from
+this clone. It uses a separate execution branch without migrating legacy tasks and
+registers the same skill suite and CLI. The detailed registration flow below also
+supports an already initialized personal execution branch.
+
 ## Resolve the tool and Hub
 
 1. Use a Git repository root containing `tools/wuditask.py` and
@@ -30,9 +38,9 @@ Confirm the result reports:
   the separate Hub remote/branch;
 - a persistent bare `hub_cache` under `$XDG_CACHE_HOME/wuditask` or
   `~/.cache/wuditask`;
-- exactly twelve skills linked under both `~/.agents/skills` and
+- thirteen skills linked under both `~/.agents/skills` and
   `~/.claude/skills`: add, archive, assign, check, delete, execute, install,
-  list, release, selfupdate, show, and unassign;
+  list, release, selfupdate, show, unassign, and coordinate;
 - `~/.local/bin/wuditask` linked to the repository entry point.
 
 Links are symbolic. After selfupdate reports `reinstall_required=true`, rerun
@@ -48,9 +56,10 @@ The installer validates an isolated operation worktree for the Hub before
 changing local registration. After success, run:
 
 ```bash
-python3 TOOL/tools/wuditask.py --json validate
+python3 TOOL/tools/wuditask.py --json validate  # legacy storage only
+# For personal storage use: coord inventory
 ```
 
-Report tool path, Hub remote/branch, bare cache, twelve-skill inventory, and
+Report tool path, Hub remote/branch, bare cache, skill inventory, and
 validation result. Reopen long-running agent sessions that cached retired
 skills.

@@ -18,6 +18,7 @@ REQUIRED_SKILL_NAMES = {
     "wuditask-archive",
     "wuditask-assign",
     "wuditask-check",
+    "wuditask-coordinate",
     "wuditask-delete",
     "wuditask-execute",
     "wuditask-install",
@@ -259,7 +260,16 @@ def install_agent_access(
         cache_root=cache_root,
     )
     with coordinator.snapshot() as repository:
-        hub_validation = validate_repository(repository)
+        if (repository.root / "coordination.json").exists():
+            from .coordination import ExecutionRepository
+
+            inventory = ExecutionRepository(repository.root).inventory()
+            hub_validation = {
+                "valid": inventory["initialized"],
+                "mode": "personal-execution",
+            }
+        else:
+            hub_validation = validate_repository(repository)
 
     destination_config = config_path(home)
     _preflight_parent(destination_config)

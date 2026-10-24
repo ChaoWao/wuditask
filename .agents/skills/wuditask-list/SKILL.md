@@ -1,11 +1,14 @@
 ---
 name: wuditask-list
-description: List shared WudiTask entries without mutation. Use when the user asks to find, filter, count, or summarize open, archived, ready, or actively executed work across one or more repositories.
+description: Legacy queue maintenance only. List shared WudiTask entries without mutation. Use when the user asks to find, filter, count, or summarize open, archived, ready, or actively executed work across one or more repositories.
 ---
 
 # List WudiTasks
 
 Use only the registered CLI's read-only `list` command.
+
+> This skill is for the legacy queue. For direct GitHub task work and personal
+> takeover/handoff, use [wuditask-coordinate](../wuditask-coordinate/SKILL.md).
 
 ## Locate the CLI
 

@@ -1,11 +1,14 @@
 ---
 name: wuditask-show
-description: Show one WudiTask with its canonical GitHub source, live owners and delivery, Hub dependencies and active agent runs, or archived completion. Use for a detailed read-only task inspection.
+description: Legacy queue maintenance only. Show one WudiTask with its canonical GitHub source, live owners and delivery, Hub dependencies and active agent runs, or archived completion. Use for a detailed read-only task inspection.
 ---
 
 # Show a WudiTask
 
 Use only the registered CLI's read-only `show` command.
+
+> This skill is for the legacy queue. For direct GitHub task work and personal
+> takeover/handoff, use [wuditask-coordinate](../wuditask-coordinate/SKILL.md).
 
 ## Locate the CLI
 

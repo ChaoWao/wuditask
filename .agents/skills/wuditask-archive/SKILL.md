@@ -1,6 +1,6 @@
 ---
 name: wuditask-archive
-description: Archive a WudiTask as done, failed, or cancelled. Use when canonical GitHub delivery is terminal and the user wants to preserve the shared outcome, source-defined acceptance evidence, and any participating agent runs.
+description: Legacy queue maintenance only. Archive a WudiTask as done, failed, or cancelled. Use when canonical GitHub delivery is terminal and the user wants to preserve the shared outcome, source-defined acceptance evidence, and any participating agent runs.
 ---
 
 # Archive a WudiTask
@@ -8,6 +8,9 @@ description: Archive a WudiTask as done, failed, or cancelled. Use when canonica
 Use the registered CLI. Do not edit, move, or delete task JSON directly.
 Ordinary outcomes remain archived; use `$wuditask-delete` only for an
 explicitly identified erroneous archived record.
+
+> This skill is for the legacy queue. For direct GitHub task work and personal
+> takeover/handoff, use [wuditask-coordinate](../wuditask-coordinate/SKILL.md).
 
 ## Locate the CLI
 

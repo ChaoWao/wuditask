@@ -25,6 +25,23 @@ def add_parser(commands: Any) -> None:
         "coord", help="Coordinate personal execution directly from GitHub tasks."
     )
     sub = parser.add_subparsers(dest="coord_command", required=True)
+    setup = sub.add_parser(
+        "setup",
+        help="Create/use a separate execution branch and install the unified skill.",
+    )
+    setup.add_argument("--remote", required=True)
+    setup.add_argument("--branch", default="personal-execution")
+    takeover = sub.add_parser(
+        "takeover",
+        help="Explicitly replace an observed run; no process-stop proof required.",
+    )
+    takeover.add_argument("url")
+    takeover.add_argument("--anchor")
+    takeover.add_argument("--session", type=Path, required=True)
+    takeover.add_argument("--expected-run-id", required=True)
+    takeover.add_argument(
+        "--reason", required=True, help="The user's explicit takeover request."
+    )
     configure = sub.add_parser(
         "configure", help="Bind this environment to one authoritative execution remote."
     )
@@ -55,9 +72,15 @@ def add_parser(commands: Any) -> None:
     )
     inspect.add_argument("url")
     inspect.add_argument("--anchor")
-    for name in ("check", "quiesce", "release", "guard"):
+    for name in ("check", "quiesce", "release", "guard", "checkpoint", "finish"):
         child = sub.add_parser(name)
         child.add_argument("--session", type=Path, required=True)
+        if name in {"checkpoint", "finish"}:
+            child.add_argument("--summary", required=True)
+        if name == "finish":
+            child.add_argument(
+                "--outcome", choices=("paused", "completed", "cancelled"), required=True
+            )
         if name == "release":
             child.add_argument("--receipt", type=Path, required=True)
         if name == "guard":
@@ -304,7 +327,7 @@ def _check(coord: GitCoordinator, ticket: dict[str, Any]) -> dict[str, Any]:
         return repo.assert_current(ticket)
 
 
-def run(args: argparse.Namespace) -> dict[str, Any]:
+def run(args: argparse.Namespace, tool_root: Path | None = None) -> dict[str, Any]:
     require(
         not args.local
         and args.hub is None
@@ -314,6 +337,10 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         "Personal coordination uses authenticated GitHub identity and its configured remote.",
     )
     actor = authenticated_actor()
+    if args.coord_command == "setup":
+        from .execution_setup import setup
+
+        return setup(args, actor, tool_root or Path(__file__).resolve().parents[1])
     if args.coord_command == "configure":
         return _configure(args, actor)
     config = _load_config(actor)
@@ -343,8 +370,11 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             lambda repo: repo.release(ticket, receipt, recovery=True),
         )
     path = args.session.expanduser().resolve()
-    if action == "acquire":
+    if action in {"acquire", "takeover"}:
         task = resolve_task(args.url, args.anchor)
+        request = {"action": action}
+        if action == "takeover":
+            request.update(expected_run_id=args.expected_run_id, reason=args.reason)
         with _file_lock(path.with_suffix(path.suffix + ".lock")):
             if path.exists():
                 ticket = _load_session(path, actor, config)
@@ -352,6 +382,11 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                     ticket["task_id"] == task["task_id"],
                     "session_task_mismatch",
                     "Use a new session path for a different task.",
+                )
+                require(
+                    ticket.get("request", {"action": "acquire"}) == request,
+                    "session_request_mismatch",
+                    "Retry the same request, or use a new session file.",
                 )
             else:
                 ticket = {
@@ -362,11 +397,18 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                     "run_id": new_run_id(),
                     "guard": "not_started",
                     "journal_path": str(path),
+                    "request": request,
                 }
                 # This journal survives a lost response; retries must reuse it.
                 journal_write(path, ticket)
         with session_lock(ticket):
-            result = _write(coord, actor, action, lambda repo: repo.acquire(ticket))
+
+            def operation(repo: ExecutionRepository) -> dict[str, Any]:
+                if action == "takeover":
+                    return repo.takeover(ticket, args.expected_run_id, args.reason)
+                return repo.acquire(ticket)
+
+            result = _write(coord, actor, action, operation)
             result["run"] = _check(coord, ticket)
             result["session_file"] = str(path)
             return result
@@ -376,6 +418,17 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         ticket = _load_session(path, actor, config)
         if action == "check":
             return {"run": _check(coord, ticket)}
+        if action == "checkpoint":
+            return _write(
+                coord, actor, action, lambda repo: repo.checkpoint(ticket, args.summary)
+            )
+        if action == "finish":
+            return _write(
+                coord,
+                actor,
+                action,
+                lambda repo: repo.finish(ticket, args.summary, args.outcome),
+            )
         if action == "quiesce":
             return _write(coord, actor, action, lambda repo: repo.quiesce(ticket))
         if action == "release":
@@ -399,13 +452,13 @@ def _guard(
     require(
         ticket.get("guard") == "not_started",
         "session_already_started",
-        "This session has already attempted a host launch. Verify stopped writers and release/recover; do not start a second host.",
+        "This session has already attempted a host launch. Finish this execution or explicitly take over into a new session; do not start a second host under this journal.",
     )
     _check(coord, ticket)
     ticket["guard"] = "started"
     journal_write(path, ticket)
     # The held session lock prevents another cooperating caller from launching or
-    # releasing this session. Descendants/remote agents still need stop verification.
+    # finishing this session. This does not fence remote descendants or takeover.
     try:
         process = subprocess.run(program, check=False)
     except OSError as exc:
@@ -413,14 +466,14 @@ def _guard(
         journal_write(path, ticket)
         raise WudiTaskError(
             "host_launch_failed",
-            "Host command failed to launch; verify before release.",
+            "Host command failed to launch; inspect the checkpoint before finishing.",
         ) from exc
     ticket.update(guard="exited", returncode=process.returncode)
     journal_write(path, ticket)
     if process.returncode:
         raise WudiTaskError(
             "host_command_failed",
-            "Host command failed; execution remains occupied until stop verification.",
+            "Host command failed; execution remains occupied until finish or explicit takeover.",
             details={
                 "run_id": ticket["run_id"],
                 "returncode": process.returncode,
@@ -432,5 +485,5 @@ def _guard(
         "run_id": ticket["run_id"],
         "returncode": process.returncode,
         "released": False,
-        "next": "Quiesce, verify all writers and external operations, then release with a stop receipt.",
+        "next": "Save a checkpoint and finish, or use optional strict release. A host exit alone does not end the execution record.",
     }

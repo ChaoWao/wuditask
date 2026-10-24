@@ -1,11 +1,14 @@
 ---
 name: wuditask-release
-description: Stop one WudiTask agent run without changing GitHub ownership or archiving the task. Use when an executing agent pauses, abandons, or hands off its exact login/run_id entry.
+description: Legacy queue maintenance only. Stop one WudiTask agent run without changing GitHub ownership or archiving the task. Use when an executing agent pauses, abandons, or hands off its exact login/run_id entry.
 ---
 
 # Release a WudiTask Agent Run
 
 Use the registered CLI. Never edit `active_agents` directly.
+
+> This skill is for the legacy queue. For direct GitHub task work and personal
+> takeover/handoff, use [wuditask-coordinate](../wuditask-coordinate/SKILL.md).
 
 ## Locate the CLI
 

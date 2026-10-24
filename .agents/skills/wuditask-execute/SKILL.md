@@ -1,6 +1,6 @@
 ---
 name: wuditask-execute
-description: Start one agent run on a ready WudiTask. Use when work should begin on a task assigned to the current GitHub login, on an unowned task, or on an explicitly selected task after confirmed co-assignment, dependency, repository, delivery, and remote Hub checks.
+description: Legacy queue maintenance only. Start one agent run on a ready WudiTask. Use when work should begin on a task assigned to the current GitHub login, on an unowned task, or on an explicitly selected task after confirmed co-assignment, dependency, repository, delivery, and remote Hub checks.
 ---
 
 # Execute a WudiTask
@@ -9,6 +9,9 @@ Use the registered CLI. Execute starts Hub work only for a current owner. When
 the selected task has no owners, it first self-assigns the authenticated login
 on GitHub and confirms that separate mutation. Use `$wuditask-assign` for
 standalone assignment or to assign an explicitly authorized different login.
+
+> This skill is for the legacy queue. For direct GitHub task work and personal
+> takeover/handoff, use [wuditask-coordinate](../wuditask-coordinate/SKILL.md).
 
 ## Locate the CLI
 

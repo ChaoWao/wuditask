@@ -43,23 +43,21 @@ Pages、范围配置和健康检查统一放在本仓库：
 
 ## 个人跨环境协调（Part 2）
 
-同一个 GitHub 账号在多台机器处理同一任务时，由 `coord` 维护一个获准主执行。
-直接使用 Issue/PR URL，无需人工 add，不修改 GitHub 指派或业务完成状态。
+用户使用 **`$wuditask-coordinate`**，直接说“处理这个 Issue”“在这里继续”“暂停”。
+主 agent 负责配置、领取、核对和交接，无需用户管理 run ID 或填写回执。
 
 ```bash
-python3 tools/wuditask.py coord configure --remote git@github.com:USER/PRIVATE-EXECUTION.git
-python3 tools/wuditask.py coord inventory
-python3 tools/wuditask.py coord init --old-writers-stopped '新建空存储，没有旧执行器'
-python3 tools/wuditask.py coord acquire https://github.com/ORG/REPO/issues/123 --session execution.json
+python3 tools/wuditask.py coord setup \
+  --remote git@github.com:TEAM/EXECUTION.git --branch personal-execution
 ```
 
-支持持久 run 重试、当前执行核对、宿主启动锁、停写、checkpoint 交接和显式恢复。
-首版交接要求人工核验旧 writer 与外部操作已停止；无自动超时抢占，也不声称能强制
-停止任意进程。详细使用和迁移见 [个人协调协议](docs/personal-coordination.md)。
+多人可共用一个执行库，记录按用户和任务独立。setup 使用新分支，不要求清理或
+迁移历史。默认避免本账号重复开工；用户明确要求即可接管，不要求旧进程停止证明。
+旧 agent 下次检查时应停新工作，但系统不强制阻止已发出的写入。
 
-旧数据不会随工具升级自动迁移；[存量协议](docs/legacy-execution.md) 只用于迁移前维护。
-业务看板无需执行存储。**Part 3** 的目标对齐、内部 DAG、子 agent 调度和宿主自动
-停写仍独立推进，通过 Part 2 接口领取和交接，不另建业务台账。
+详细交互及内部 CLI 见 [个人协调协议](docs/personal-coordination.md)。严格停写
+核验仍是可选方式；[存量队列协议](docs/legacy-execution.md) 只用于旧任务维护。
+**Part 3** 的内部 DAG、子 agent 调度和自动停止仍独立推进。
 
 ## 开发验证
 

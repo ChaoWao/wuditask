@@ -240,6 +240,13 @@ class ExecutionRepository:
             "execution_conflict",
             "This GitHub task already has an execution for this user; inspect it before continuing.",
         )
+        run = self._new_run(ticket)
+        record["runs"][run["run_id"]] = run
+        record["current"] = run["run_id"]
+        return self._save(record, run)
+
+    @staticmethod
+    def _new_run(ticket: dict[str, Any]) -> dict[str, Any]:
         run = {
             field: ticket[field]
             for field in (
@@ -253,8 +260,103 @@ class ExecutionRepository:
             )
         }
         run.update(state="active", acquired_at=utc_now(), receipts={})
+        return run
+
+    def takeover(
+        self, ticket: dict[str, Any], expected_run_id: str, reason: str
+    ) -> dict[str, Any]:
+        """Replace the observed execution without claiming its processes stopped."""
+        validate_ticket(ticket)
+        text_field(reason, "explicit user takeover request")
+        require(
+            bool(RUN_ID_RE.fullmatch(expected_run_id)),
+            "invalid_run_id",
+            "Takeover must name the observed old run.",
+        )
+        require(
+            expected_run_id != ticket["run_id"],
+            "invalid_takeover",
+            "Takeover requires a new run.",
+        )
+        record = self.inspect(ticket["actor_id"], ticket["task_id"])
+        request = {"expected_run_id": expected_run_id, "reason": reason}
+        if ticket["run_id"] in record["runs"]:
+            run = self.assert_current(ticket)
+            require(
+                run.get("takeover") == request,
+                "operation_reuse",
+                "Retry the original takeover without changing its target or reason.",
+            )
+            return {"changed": False, "run_id": run["run_id"], "run": run}
+        require(
+            record["current"] == expected_run_id,
+            "takeover_conflict",
+            "Current run changed since inspection. Inspect and reconsider; do not automatically overwrite its successor.",
+        )
+        old = record["runs"][expected_run_id]
+        old.update(
+            state="released",
+            released_at=utc_now(),
+            disposition="superseded",
+            superseded_by=ticket["run_id"],
+            stop_verified=False,
+        )
+        run = self._new_run(ticket)
+        run["takeover"] = request
+        if old.get("checkpoint"):
+            run["checkpoint"] = old["checkpoint"]
         record["runs"][run["run_id"]] = run
         record["current"] = run["run_id"]
+        return self._save(record, run)
+
+    def checkpoint(self, ticket: dict[str, Any], summary: str) -> dict[str, Any]:
+        text_field(summary, "checkpoint summary/reference")
+        record = self.inspect(ticket["actor_id"], ticket["task_id"])
+        run = self._owned(record, ticket)
+        require(
+            record["current"] == run["run_id"],
+            "stale_execution",
+            "This execution was replaced or ended; stop new work.",
+        )
+        if run.get("checkpoint") == summary:
+            return {"changed": False, "run_id": run["run_id"], "run": deepcopy(run)}
+        run.update(checkpoint=summary, checkpoint_at=utc_now())
+        return self._save(record, run)
+
+    def finish(
+        self, ticket: dict[str, Any], checkpoint: str, outcome: str
+    ) -> dict[str, Any]:
+        """End this execution record; this is neither process death nor Issue closure."""
+        text_field(checkpoint, "checkpoint summary/reference")
+        require(
+            outcome in {"paused", "completed", "cancelled"},
+            "invalid_outcome",
+            "Choose paused, completed or cancelled.",
+        )
+        record = self.inspect(ticket["actor_id"], ticket["task_id"])
+        run = self._owned(record, ticket)
+        request = {"checkpoint": checkpoint, "outcome": outcome}
+        if "finish" in run:
+            require(
+                run["finish"] == request,
+                "operation_reuse",
+                "Retry finish with the original outcome and checkpoint.",
+            )
+            return {"changed": False, "run_id": run["run_id"], "run": deepcopy(run)}
+        require(
+            record["current"] == run["run_id"],
+            "stale_execution",
+            "Old execution cannot finish its successor.",
+        )
+        run.update(
+            state="released",
+            released_at=utc_now(),
+            disposition=outcome,
+            checkpoint=checkpoint,
+            finish=request,
+            stop_verified=False,
+        )
+        record["current"] = None
         return self._save(record, run)
 
     def quiesce(self, ticket: dict[str, Any]) -> dict[str, Any]:
@@ -341,7 +443,11 @@ class ExecutionRepository:
             "Quiesce the run before stopping writers and releasing it.",
         )
         run.update(
-            state="released", released_at=utc_now(), checkpoint=receipt["checkpoint"]
+            state="released",
+            released_at=utc_now(),
+            checkpoint=receipt["checkpoint"],
+            disposition="verified-release",
+            stop_verified=True,
         )
         run["receipts"][operation_id] = deepcopy(payload)
         record["current"] = None

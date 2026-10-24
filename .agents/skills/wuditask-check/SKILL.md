@@ -1,6 +1,6 @@
 ---
 name: wuditask-check
-description: Check WudiTask readiness and GitHub/Hub consistency without mutation. Use when the user asks about dependencies, blockers, owners, active agents, delivery progress, terminal archival work, or drift for one task or all current open and archived tasks.
+description: Legacy queue maintenance only. Check WudiTask readiness and GitHub/Hub consistency without mutation. Use when the user asks about dependencies, blockers, owners, active agents, delivery progress, terminal archival work, or drift for one task or all current open and archived tasks.
 ---
 
 # Check WudiTask State
@@ -8,6 +8,9 @@ description: Check WudiTask readiness and GitHub/Hub consistency without mutatio
 Use only the registered CLI's read-only `check` command. It replaces the old
 dependency-check and reconciliation workflows; those commands have no
 compatibility aliases.
+
+> This skill is for the legacy queue. For direct GitHub task work and personal
+> takeover/handoff, use [wuditask-coordinate](../wuditask-coordinate/SKILL.md).
 
 ## Locate the CLI
 

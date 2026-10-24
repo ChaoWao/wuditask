@@ -1,12 +1,15 @@
 ---
 name: wuditask-unassign
-description: Remove a GitHub assignee from a WudiTask's canonical Issue or pull request without releasing agent runs. Use for the current login by default or another named login only with explicit user authorization.
+description: Legacy queue maintenance only. Remove a GitHub assignee from a WudiTask's canonical Issue or pull request without releasing agent runs. Use for the current login by default or another named login only with explicit user authorization.
 ---
 
 # Remove GitHub Assignment
 
 Use the registered CLI. Unassignment mutates only GitHub; it never removes a
 Hub `active_agents` entry and never stops work implicitly.
+
+> This skill is for the legacy queue. For direct GitHub task work and personal
+> takeover/handoff, use [wuditask-coordinate](../wuditask-coordinate/SKILL.md).
 
 ## Locate the CLI
 

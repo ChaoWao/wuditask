@@ -12,6 +12,7 @@ EXPECTED_SKILLS = {
     "wuditask-archive",
     "wuditask-assign",
     "wuditask-check",
+    "wuditask-coordinate",
     "wuditask-delete",
     "wuditask-execute",
     "wuditask-install",
@@ -192,7 +193,7 @@ class SkillTests(unittest.TestCase):
         self.assertIn("hub_cache", install)
         self.assertIn("XDG_CACHE_HOME", install)
         self.assertIn("isolated operation worktree", install)
-        self.assertIn("exactly twelve skills", install)
+        self.assertIn("unified personal coordination skill", install)
         self.assertIn("retired dep-check/reconcile links", install)
 
 

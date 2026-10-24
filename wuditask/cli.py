@@ -45,8 +45,8 @@ from .workflow import (
 
 HELP_COMMANDS = {
     "coord": (
-        "Personal execution: configure, acquire, inspect, check, guard, quiesce, release, recover.",
-        "wuditask coord --help",
+        "Personal execution: setup, acquire, inspect, check, takeover, checkpoint, finish.",
+        "$wuditask-coordinate",
     ),
     "add": ("Add a GitHub-backed task reference.", "$wuditask-add"),
     "assign": ("Assign GitHub responsibility without starting work.", "$wuditask-assign"),
@@ -868,10 +868,10 @@ def _help(topic: str | None) -> dict[str, Any]:
         "cli_invocation": "wuditask help [topic]",
         "workflow": [
             "GitHub Issue/PR is the business source of truth; build-site reads it directly.",
-            "Personal coordination: coord configure -> inventory/init -> acquire URL --session FILE.",
+            "Use $wuditask-coordinate; one-time coord setup creates a separate execution branch.",
             "coord guard starts one host under a local session lock; coord check verifies current rights.",
-            "Quiesce, verify stopped writers and pending operations, then release with a checkpoint receipt.",
-            "No automatic expiry or self-assignment. Recovery requires explicit user authorization and stop evidence.",
+            "Explicit takeover replaces an observed run without stop proof; finish saves a checkpoint and ends your record.",
+            "No automatic expiry or self-assignment. Strict verified release/recovery remains optional.",
             "Unprefixed queue commands below are legacy-only; migrated storage rejects them.",
         ],
         "commands": [
@@ -981,7 +981,7 @@ def run(args: argparse.Namespace, tool_root: Path) -> dict[str, Any]:
     if args.command == "coord":
         from .execution_cli import run as coordinate
 
-        return coordinate(args)
+        return coordinate(args, tool_root)
     if args.command == "help":
         return _help(args.topic)
     if args.command == "selfupdate":

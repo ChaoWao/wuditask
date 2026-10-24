@@ -1,12 +1,15 @@
 ---
 name: wuditask-assign
-description: Assign a GitHub user to a WudiTask's canonical Issue or pull request without starting execution. Use when responsibility should be added for the current login or, with explicit user authorization, another named login.
+description: Legacy queue maintenance only. Assign a GitHub user to a WudiTask's canonical Issue or pull request without starting execution. Use when responsibility should be added for the current login or, with explicit user authorization, another named login.
 ---
 
 # Assign GitHub Responsibility
 
 Use the registered CLI. Assignment mutates only the canonical GitHub Issue or
 pull request; it never adds a Hub `active_agents` entry.
+
+> This skill is for the legacy queue. For direct GitHub task work and personal
+> takeover/handoff, use [wuditask-coordinate](../wuditask-coordinate/SKILL.md).
 
 ## Locate the CLI
 
