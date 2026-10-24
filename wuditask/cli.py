@@ -44,7 +44,6 @@ from .workflow import (
 
 
 HELP_COMMANDS = {
-    "work": ("Manage one task’s internal plan and agent evidence.", "$wuditask work on this task"),
     "upgrade": ("Upgrade the original two-repository installation in place.", "$wuditask"),
     "coord": (
         "Personal execution: setup, acquire, inspect, check, takeover, checkpoint, finish.",
@@ -94,9 +93,6 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--json", action="store_true", help="Emit stable JSON output.")
     parser.add_argument("--actor", help=argparse.SUPPRESS)
     commands = parser.add_subparsers(dest="command", required=True)
-
-    from .agent_cli import add_parser as add_work_parser
-    add_work_parser(commands)
 
     from .execution_cli import add_parser
 
@@ -878,6 +874,7 @@ def _help(topic: str | None) -> dict[str, Any]:
             "Use $wuditask; upgrade updates the original tool and execution branch in place.",
             "coord guard starts one host under a local session lock; coord check verifies current rights.",
             "Explicit takeover replaces an observed run without stop proof; finish saves a checkpoint and ends your record.",
+            "Repository skills own implementation planning, boards and agent delegation after acquisition.",
             "No automatic expiry or self-assignment. Strict verified release/recovery remains optional.",
             "Unprefixed queue commands below are legacy-only; migrated storage rejects them.",
         ],
@@ -985,9 +982,6 @@ def _write_actor(args: argparse.Namespace, coordinator: GitCoordinator) -> Ident
 
 def run(args: argparse.Namespace, tool_root: Path) -> dict[str, Any]:
     tool_root = tool_root.expanduser().resolve()
-    if args.command == "work":
-        from .agent_cli import run as work
-        return work(args, tool_root)
     if args.command == "coord":
         from .execution_cli import run as coordinate
 

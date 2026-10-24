@@ -14,16 +14,18 @@ Same-account machines use the same execution branch. Stable user ID plus task no
 wuditask --json coord inspect ISSUE_URL
 ```
 
-## 4. Implement and validate
+## 4. Hand off to the repository workflow
 
-The main agent aligns the goal and approach using existing agreements, plans internal work, delegates when authorized, validates results and delivers a PR. Use the local `work` plan and HTML board for the internal DAG, typed artifact/decision/merge gates and delegated attempts. Codex native handoffs and supervised Claude/Codex CLI calls save candidate results; only manager review accepts work. Current-head review and CI are required before Ready. Internal work is not added to the business DAG. Check execution rights before starting work and controlled external writes.
+After acquisition, read the target repository's task-development skill and current instructions. In simpler, use [develop-task](https://github.com/hw-native-sys/simpler/blob/main/.claude/skills/develop-task/SKILL.md) for design alignment, internal dependencies, boards, agent collaboration and reviewed delivery. The agent chooses the plan format and invocation methods for the current task and host. WudiTask does not run an internal scheduler or impose a plan schema.
+
+Pass the personal execution journal into that workflow. Check execution rights before starting work and controlled external writes. Children share the main agent's authority rather than acquiring separate business tasks. Internal work is not added to the business DAG.
 
 ## 5. Save progress and finish
 
 Save a checkpoint and finish the exact personal run. This never releases a successor and never marks an Issue completed. Update GitHub under the existing task authorization; business acceptance remains there. Old queue records are historical only.
 
-## Continue after a child finishes
+## Continue through the same entry
 
-Read the durable inbox, verify actual exit and evidence, accept or rework the result, then dispatch authorized successors. Unknown launches are reconciled, never blindly repeated. Native host events or a configured and verified wake bridge can notify the manager; without such support, explicitly resume the task. No background scheduler is installed by default.
+Ask the chosen agent to use the wuditask skill. Codex and Claude Code use the installed links; OpenCode also reads their compatible global skill directories. WudiTask checks personal execution rights, then the repository workflow resumes its saved work and reviews available results. Verify actual host wake support rather than promising unattended continuation.
 
-[Full task-internal workflow](https://github.com/ChaoWao/wuditask/blob/main/docs/main-agent-workflow.md) · [Unified skill](https://github.com/ChaoWao/wuditask/blob/main/.agents/skills/wuditask/SKILL.md)
+[Unified skill](https://github.com/ChaoWao/wuditask/blob/main/.agents/skills/wuditask/SKILL.md) · [Installation and client discovery](install.html)

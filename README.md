@@ -68,12 +68,27 @@ python3 TOOL/tools/wuditask.py --json coord upgrade
 用户明确要求即可接管。旧进程不被强制终止，已发出的操作可能继续完成。
 
 GitHub 是业务唯一台账；执行仓只存执行与恢复记录。详见 [个人协调协议](docs/personal-coordination.md)。
-**Part 3** 已提供本地任务 DAG、Codex 原生交接、Claude/Codex 进程监督、结果收件与验收、
-HTML 看板及合入门槛。主 agent 先与用户对齐完整功能，再并行派发互不冲突的子项；
-子 agent 结束只产生候选结果，主 agent 审查后才解锁后续。
+任务内规划、看板、agent 协作和交付由目标仓自己的 skill 负责。
+在 simpler 中，领取后转交 [develop-task](https://github.com/hw-native-sys/simpler/blob/main/.claude/skills/develop-task/SKILL.md)。
+WudiTask 继续提供执行权检查和进展记录，不规定内部任务格式或启动命令。
 
-仍使用 `$wuditask`，不需要登记另一份业务任务。详见 [任务内工作流](docs/main-agent-workflow.md)。
-未配置并验证宿主唤醒时，需要继续原任务来接收结果；工具不会自动杀进程或替用户合入。
+### Claude Code、Codex、OpenCode 共用
+
+安装只维护一份 `wuditask` skill，通过软链接让客户端发现：
+
+| 客户端 | 读取位置 | 显式调用 |
+| --- | --- | --- |
+| Codex | `~/.agents/skills/wuditask` | `$wuditask` |
+| Claude Code | `~/.claude/skills/wuditask` | `/wuditask` |
+| OpenCode | 兼容读取上述两个目录 | “使用 wuditask skill” |
+
+三个入口指向同一份内容，升级工具后一起更新；其他机器仍需各自升级。
+已运行的会话如缓存了技能目录，可开启新会话。能发现 skill 不代表每次都会调用；
+需要个人协调时应明确要求使用它。客户端若禁用了技能或兼容目录，应按其当前配置检查。
+依据：[Codex](https://developers.openai.com/codex/skills/)、[Claude Code](https://code.claude.com/docs/en/skills)、[OpenCode](https://opencode.ai/docs/skills/)。
+
+旧版 `work` 命令已移除；已有本地计划、执行日志和产物保留，可由仓内流程读取接续。
+升级不自动重启或终止 agent，也不改变现有 `coord` 执行记录。
 
 ## 开发验证
 

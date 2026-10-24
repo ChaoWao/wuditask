@@ -1,6 +1,6 @@
 # 安装与使用 WudiTask
 
-统一入口是 `$wuditask`（Claude Code 为 `/wuditask`）。对 agent 说“升级”“处理这个 Issue”“在这里接管继续”即可。
+统一 skill 是 `wuditask`：Codex 可用 `$wuditask`，Claude Code 可用 `/wuditask`，OpenCode 可直接说“使用 wuditask skill”。对 agent 说“升级”“处理这个 Issue”“在这里接管继续”即可。
 
 GitHub Issue/PR 保存业务事实，工具仓提供程序和看板，原执行仓保存个人执行与恢复记录。继续使用这两个仓库和原分支，不创建新的执行分支。
 
@@ -39,7 +39,8 @@ python3 tools/wuditask.py --json coord setup \
 ## 安装结果和验证
 
 - `~/.wuditask/config.json` 保存两个仓库的位置，`personal/config.json` 保存本环境身份。
-- `~/.agents/skills/wuditask` 和 `~/.claude/skills/wuditask` 指向统一 skill。
+- `~/.agents/skills/wuditask`（Codex）和 `~/.claude/skills/wuditask`（Claude Code）链接到同一份 skill。
+- OpenCode 兼容读取这两个目录，无需第三份副本；若未发现，检查客户端技能权限及兼容目录设置。
 - `~/.local/bin/wuditask` 指向 CLI；若不在 PATH，可直接用 Python 调用。
 
 ```bash
@@ -51,7 +52,9 @@ wuditask help
 
 `$wuditask` 读取 Issue/PR 后按已有约定领取。默认拒绝本账号重复开工；你明确要求接管时无需停止证明，旧 run 在下次检查后停止新工作。系统不强制杀旧进程，已发出的外部操作仍可能完成。
 
-领取后，主 agent 可通过同一入口建立本地 DAG 和 HTML 看板，派发 Codex/Claude 子 agent、验收结果并推进完整 PR。宿主没有可靠唤醒能力时，需手动继续原任务收取结果，不承诺后台自动续办。
+领取后转交目标仓的开发 skill。在 simpler 中使用 [develop-task](https://github.com/hw-native-sys/simpler/blob/main/.claude/skills/develop-task/SKILL.md)，由主 agent 根据最新任务和环境安排看板、子 agent 与交付；WudiTask 提供执行权检查和 checkpoint。
+
+旧版 `work` 命令已移除，已有本地计划和日志保留作为恢复依据。升级不自动恢复任务或终止旧进程。客户端缓存了旧 skill 时可新开会话；能发现 skill 与主动调用不同，需要协调时应明确要求使用它。
 
 暂停和完成只结束本次执行并保存摘要，不自动关闭 Issue。业务进展、设计和验收继续记录在 GitHub。
 

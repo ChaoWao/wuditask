@@ -98,8 +98,9 @@ class InstallTests(unittest.TestCase):
                         (skills_root / skill_name).resolve(),
                         installed.resolve(),
                     )
-                self.assertIn(
-                    "One user entry", (base / "wuditask/SKILL.md").read_text()
+                self.assertEqual(
+                    (skills_root / "wuditask/SKILL.md").read_text(),
+                    (base / "wuditask/SKILL.md").read_text(),
                 )
             self.assertTrue((home / ".local" / "bin" / "wuditask").is_symlink())
             self.assertEqual(len(skill_names) * 2 + 1, len(result["links"]))

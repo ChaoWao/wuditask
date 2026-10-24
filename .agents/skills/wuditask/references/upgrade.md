@@ -59,3 +59,30 @@ python3 tools/wuditask.py --json coord setup --remote EXECUTION_REMOTE --branch 
 The remote branch must already exist; setup upgrades it in place. Shared public storage
 must not contain credentials, private conversation or sensitive recovery material.
 Use SSH/Git credential storage, never credentials embedded in remote URLs.
+
+## Agent discovery and repository handoff
+
+Keep one skill source in the registered tool clone. Installation links
+`~/.agents/skills/wuditask` for Codex and `~/.claude/skills/wuditask` for Claude Code
+to that source. OpenCode also discovers those compatible global directories, so
+no third copy is needed. Check each installed client's current discovery rules
+and permissions if it does not list the skill. Prefer a fresh session when a
+client caches its skill catalog. Ask it explicitly to use the wuditask skill;
+discoverability alone does not ensure invocation on every task.
+
+Official discovery references:
+[Codex](https://developers.openai.com/codex/skills/),
+[Claude Code](https://code.claude.com/docs/en/skills),
+[OpenCode](https://opencode.ai/docs/skills/).
+
+WudiTask coordinates the personal execution; repository instructions own task
+implementation. In simpler, read the checkout's `develop-task` skill. Upgrading
+WudiTask neither installs repository skills globally nor updates unrelated code
+checkouts. Read a skill by its file path when the client does not discover that
+repository's skill directory automatically.
+
+When upgrading from a version with the internal `work` commands, keep existing
+local plans, attempts and logs as recovery evidence. The commands are removed;
+no local execution records are deleted, migrated, auto-accepted or restarted.
+Reconcile any still-running authors using host tools and resume through the
+repository workflow. Personal `coord` claims and checkpoints keep their protocol.
