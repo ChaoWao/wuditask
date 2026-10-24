@@ -139,6 +139,70 @@ class ExecutionRepository:
         )
         return {"changed": True, "initialized": True, "migration": marker["migration"]}
 
+    def upgrade_in_place(self, actor: dict[str, str]) -> dict[str, Any]:
+        """Retire the queue protocol, retaining old records as historical evidence."""
+        report = self.inventory()
+        if report["initialized"]:
+            return {"changed": False, "initialized": True}
+        legacy = self.root / "data" / "legacy"
+        require(
+            not legacy.exists(),
+            "legacy_archive_exists",
+            "Inspect the existing historical archive before upgrading.",
+        )
+        migration = {
+            "mode": "in-place-upgrade",
+            "stop_verified": False,
+            "legacy_runs_resumed": False,
+            **report,
+        }
+        marker = {
+            "format": FORMAT,
+            "initialized_at": utc_now(),
+            "initialized_by": actor,
+            "migration": migration,
+        }
+        legacy.mkdir(parents=True)
+        manifest = self.root / "hub.json"
+        if manifest.exists():
+            (legacy / "hub.json").write_bytes(manifest.read_bytes())
+        for name in ("open", "archive", "deletions"):
+            old = self.root / "data" / name
+            if old.exists():
+                old.rename(legacy / name)
+        atomic_write_json(self.root / "coordination.json", marker)
+        atomic_write_json(manifest, RETIRED_HUB)
+        atomic_write_json(self.root / "data/execution/migration.json", migration)
+        return {"changed": True, "initialized": True, "migration": migration}
+
+    def check_relocation(self, target: dict[str, str]) -> bool:
+        marker = read_json(self.root / "coordination.json")
+        if marker.get("format") == "github-personal-execution-moved":
+            require(
+                marker.get("target") == target,
+                "relocation_conflict",
+                "This branch already moved to a different target.",
+            )
+            return True
+        self._require_initialized()
+        require(
+            not any((self.root / "data/execution/claims").glob("*.json")),
+            "execution_history_requires_transfer",
+            "The old branch contains execution history. Transfer it before rebinding; nothing was changed.",
+        )
+        return False
+
+    def retire_empty_branch(self, target: dict[str, str]) -> dict[str, Any]:
+        if self.check_relocation(target):
+            return {"changed": False}
+        # A different format also stops older personal-coordination clients.
+        marker = read_json(self.root / "coordination.json")
+        marker.update(
+            format="github-personal-execution-moved", target=target, moved_at=utc_now()
+        )
+        atomic_write_json(self.root / "coordination.json", marker)
+        return {"changed": True}
+
     def _require_initialized(self) -> None:
         marker = read_json(self.root / "coordination.json")
         require(

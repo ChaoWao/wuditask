@@ -79,13 +79,7 @@ def build_business_site(
         for destination, asset in _ASSETS.items():
             shutil.copy2(source / asset, staging / destination)
         for name, content in guides.items():
-            notice = '<p style="padding:16px;background:#fff5d9">Legacy execution workflow · 此页描述存量执行协议；<a href="index.html">新的 GitHub 业务图</a>无需 Hub task 或 archive。</p>'
-            (staging / name).write_text(
-                content.replace(
-                    '<main id="main-content">', '<main id="main-content">' + notice
-                ),
-                encoding="utf-8",
-            )
+            (staging / name).write_text(content, encoding="utf-8")
         atomic_write_json(staging / "graph.json", snapshot)
         (staging / ".nojekyll").touch()
         (staging / ".wuditask-business-site").touch()

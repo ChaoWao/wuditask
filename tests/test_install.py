@@ -14,21 +14,7 @@ from wuditask.util import atomic_write_json
 from tests.helpers import add_task, git, make_hub_origin
 
 ROOT = Path(__file__).resolve().parents[1]
-EXPECTED_SKILLS = {
-    "wuditask-add",
-    "wuditask-archive",
-    "wuditask-assign",
-    "wuditask-check",
-    "wuditask-coordinate",
-    "wuditask-delete",
-    "wuditask-execute",
-    "wuditask-install",
-    "wuditask-list",
-    "wuditask-release",
-    "wuditask-selfupdate",
-    "wuditask-show",
-    "wuditask-unassign",
-}
+EXPECTED_SKILLS = {"wuditask"}
 
 
 def make_tool(
@@ -51,7 +37,8 @@ def make_tool(
     else:
         (tool / "tools").mkdir(parents=True)
         (tool / "tools" / "wuditask.py").write_text("#!/usr/bin/env python3\n")
-        for name in sorted(skills or EXPECTED_SKILLS):
+        (tool / ".agents/skills").mkdir(parents=True)
+        for name in sorted(EXPECTED_SKILLS if skills is None else skills):
             skill = tool / ".agents" / "skills" / name
             skill.mkdir(parents=True)
             (skill / "SKILL.md").write_text(f"---\nname: {name}\n---\n")
@@ -112,16 +99,7 @@ class InstallTests(unittest.TestCase):
                         installed.resolve(),
                     )
                 self.assertIn(
-                    "canonical GitHub source",
-                    (base / "wuditask-add" / "SKILL.md").read_text(),
-                )
-                self.assertNotIn(
-                    "text source",
-                    (base / "wuditask-add" / "SKILL.md").read_text().lower(),
-                )
-                self.assertIn(
-                    "Do not create a GitHub Issue for this maintenance request",
-                    (base / "wuditask-selfupdate" / "SKILL.md").read_text(),
+                    "One user entry", (base / "wuditask/SKILL.md").read_text()
                 )
             self.assertTrue((home / ".local" / "bin" / "wuditask").is_symlink())
             self.assertEqual(len(skill_names) * 2 + 1, len(result["links"]))
@@ -296,10 +274,10 @@ class InstallTests(unittest.TestCase):
                 hub_remote=str(hub_remote),
                 home=home,
             )
-            stale_source = old_tool / ".agents" / "skills" / "wuditask"
+            stale_source = old_tool / ".agents" / "skills" / "wuditask-old"
             stale_source.mkdir()
             for base in (home / ".agents" / "skills", home / ".claude" / "skills"):
-                (base / "wuditask").symlink_to(
+                (base / "wuditask-old").symlink_to(
                     stale_source,
                     target_is_directory=True,
                 )
@@ -314,7 +292,7 @@ class InstallTests(unittest.TestCase):
             config = json.loads((home / ".wuditask" / "config.json").read_text())
             self.assertEqual(str(new_tool.resolve()), config["tool_path"])
             for base in (home / ".agents" / "skills", home / ".claude" / "skills"):
-                self.assertFalse((base / "wuditask").exists())
+                self.assertFalse((base / "wuditask-old").exists())
                 for name in EXPECTED_SKILLS:
                     self.assertEqual(
                         (new_tool / ".agents" / "skills" / name).resolve(),
@@ -333,13 +311,13 @@ class InstallTests(unittest.TestCase):
             home = root / "home"
             agent_skills = home / ".agents" / "skills"
             agent_skills.mkdir(parents=True)
-            stale_source = tool / ".agents" / "skills" / "wuditask"
+            stale_source = tool / ".agents" / "skills" / "wuditask-old"
             stale_source.mkdir()
-            (agent_skills / "wuditask").symlink_to(
+            (agent_skills / "wuditask-old").symlink_to(
                 stale_source,
                 target_is_directory=True,
             )
-            conflict = agent_skills / "wuditask-list"
+            conflict = agent_skills / "wuditask"
             conflict.write_text("user-owned\n")
 
             with self.assertRaises(WudiTaskError) as raised:
@@ -350,7 +328,7 @@ class InstallTests(unittest.TestCase):
                 )
 
             self.assertEqual("install_path_exists", raised.exception.code)
-            self.assertTrue((agent_skills / "wuditask").is_symlink())
+            self.assertTrue((agent_skills / "wuditask-old").is_symlink())
             self.assertEqual("user-owned", conflict.read_text().strip())
             self.assertFalse((agent_skills / "wuditask-add").exists())
             self.assertFalse((home / ".claude").exists())
@@ -364,9 +342,9 @@ class InstallTests(unittest.TestCase):
             home = root / "home"
             agent_skills = home / ".agents" / "skills"
             agent_skills.mkdir(parents=True)
-            stale_source = tool / ".agents" / "skills" / "wuditask"
+            stale_source = tool / ".agents" / "skills" / "wuditask-old"
             stale_source.mkdir()
-            (agent_skills / "wuditask").symlink_to(
+            (agent_skills / "wuditask-old").symlink_to(
                 stale_source,
                 target_is_directory=True,
             )
@@ -380,7 +358,7 @@ class InstallTests(unittest.TestCase):
                 )
 
             self.assertEqual("install_path_exists", raised.exception.code)
-            self.assertTrue((agent_skills / "wuditask").is_symlink())
+            self.assertTrue((agent_skills / "wuditask-old").is_symlink())
             self.assertFalse((agent_skills / "wuditask-add").exists())
             self.assertEqual("user-owned", (home / ".claude").read_text().strip())
             self.assertFalse((home / ".wuditask" / "config.json").exists())
@@ -409,7 +387,7 @@ class InstallTests(unittest.TestCase):
     def test_installer_rejects_a_missing_required_skill(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
-            missing = "wuditask-release"
+            missing = "wuditask"
             tool = make_tool(root, EXPECTED_SKILLS - {missing})
             hub_remote = make_hub_origin(root)
 

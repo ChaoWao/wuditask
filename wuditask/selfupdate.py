@@ -200,7 +200,7 @@ def self_update(
                 "actual_remote": remote,
                 "configured_branch": config.tool_branch,
                 "actual_branch": branch,
-                "action": "Switch back to the registered tool branch and remote, or run the wuditask-install skill again.",
+                "action": "Switch back to the registered tool branch and remote, or use the wuditask upgrade workflow.",
             },
             exit_code=3,
         )

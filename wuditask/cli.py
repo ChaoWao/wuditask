@@ -44,22 +44,23 @@ from .workflow import (
 
 
 HELP_COMMANDS = {
+    "upgrade": ("Upgrade the original two-repository installation in place.", "$wuditask"),
     "coord": (
         "Personal execution: setup, acquire, inspect, check, takeover, checkpoint, finish.",
-        "$wuditask-coordinate",
+        "$wuditask",
     ),
-    "add": ("Add a GitHub-backed task reference.", "$wuditask-add"),
-    "assign": ("Assign GitHub responsibility without starting work.", "$wuditask-assign"),
-    "check": ("Read current dependencies, owners, agents, and delivery.", "$wuditask-check"),
-    "execute": ("Start one confirmed agent run on ready work.", "$wuditask-execute"),
-    "release": ("Stop one exact agent run without unassigning.", "$wuditask-release"),
-    "unassign": ("Remove GitHub responsibility after agents stop.", "$wuditask-unassign"),
-    "archive": ("Archive a terminal outcome with evidence.", "$wuditask-archive"),
-    "delete": ("Delete explicitly identified erroneous archive records.", "$wuditask-delete"),
-    "list": ("List queue entries with live GitHub state.", "$wuditask-list"),
-    "show": ("Show one task and both sources of truth.", "$wuditask-show"),
-    "install": ("Install the tool and separate Hub access.", "$wuditask-install"),
-    "selfupdate": ("Update or directly maintain WudiTask.", "$wuditask-selfupdate"),
+    "add": ("Add a GitHub-backed task reference.", "$wuditask"),
+    "assign": ("Assign GitHub responsibility without starting work.", "$wuditask"),
+    "check": ("Read current dependencies, owners, agents, and delivery.", "$wuditask"),
+    "execute": ("Start one confirmed agent run on ready work.", "$wuditask"),
+    "release": ("Stop one exact agent run without unassigning.", "$wuditask"),
+    "unassign": ("Remove GitHub responsibility after agents stop.", "$wuditask"),
+    "archive": ("Archive a terminal outcome with evidence.", "$wuditask"),
+    "delete": ("Delete explicitly identified erroneous archive records.", "$wuditask"),
+    "list": ("List queue entries with live GitHub state.", "$wuditask"),
+    "show": ("Show one task and both sources of truth.", "$wuditask"),
+    "install": ("Install the tool and separate Hub access.", "$wuditask"),
+    "selfupdate": ("Update or directly maintain WudiTask.", "$wuditask"),
 }
 
 GITHUB_SOURCE_URL_RE = re.compile(
@@ -165,6 +166,8 @@ def _parser() -> argparse.ArgumentParser:
     install.add_argument("--replace", action="store_true")
     install.add_argument("--hub-remote", required=True)
     install.add_argument("--hub-branch", default="main")
+
+    commands.add_parser("upgrade", help="Update the installed tool and upgrade original execution storage.")
 
     update = commands.add_parser("selfupdate", help="Fast-forward the installed tool.")
     update.add_argument("--check", action="store_true")
@@ -868,7 +871,7 @@ def _help(topic: str | None) -> dict[str, Any]:
         "cli_invocation": "wuditask help [topic]",
         "workflow": [
             "GitHub Issue/PR is the business source of truth; build-site reads it directly.",
-            "Use $wuditask-coordinate; one-time coord setup creates a separate execution branch.",
+            "Use $wuditask; upgrade updates the original tool and execution branch in place.",
             "coord guard starts one host under a local session lock; coord check verifies current rights.",
             "Explicit takeover replaces an observed run without stop proof; finish saves a checkpoint and ends your record.",
             "No automatic expiry or self-assignment. Strict verified release/recovery remains optional.",
@@ -984,6 +987,12 @@ def run(args: argparse.Namespace, tool_root: Path) -> dict[str, Any]:
         return coordinate(args, tool_root)
     if args.command == "help":
         return _help(args.topic)
+    if args.command == "upgrade":
+        from .upgrade import upgrade_installation
+
+        if args.local or args.hub is not None or args.actor:
+            raise WudiTaskError("upgrade_scope_invalid", "Upgrade uses the registered installation and authenticated account.")
+        return upgrade_installation(tool_root)
     if args.command == "selfupdate":
         if args.local or args.hub is not None:
             raise WudiTaskError(

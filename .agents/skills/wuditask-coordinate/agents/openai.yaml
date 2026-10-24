@@ -1,4 +1,0 @@
-interface:
-  display_name: "Coordinate WudiTask"
-  short_description: "Start, take over and hand off your GitHub task work"
-  default_prompt: "Use $wuditask-coordinate to handle this GitHub task's execution and handoff across my environments."

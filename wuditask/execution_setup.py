@@ -1,18 +1,18 @@
-"""One-time agent setup without migrating the old business/task branch."""
+"""Upgrade the original execution branch and register the single skill."""
 
 from __future__ import annotations
 
 import argparse
 import subprocess
-import tempfile
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
 
-from .coordination import ExecutionRepository, require
-from .execution_cli import _configure, coordinator, personal_root
+from .coordination import require
+from .execution_cli import _configure, coordinator, personal_root, journal_write
 from .gitops import _file_lock
 from .install import _same_repository, install_agent_access
+from .model import Identity
 from .util import read_json
 
 
@@ -26,61 +26,18 @@ def prepare_branch(remote: str, branch: str, actor: dict[str, str]) -> dict[str,
         "Keep credentials in SSH or Git credential storage.",
     )
     coord = coordinator({"remote": remote, "branch": branch})
-    probe = subprocess.run(
-        [
-            "git",
-            "ls-remote",
-            "--exit-code",
-            "--heads",
-            "--",
-            remote,
-            f"refs/heads/{branch}",
-        ],
-        capture_output=True,
-        text=True,
-        check=False,
+    # snapshot/write require the existing branch. No orphan or alternate branch is made.
+    result = coord.write(
+        lambda repo: repo.upgrade_in_place(actor),
+        Identity(actor["login"]),
+        lambda _: "Upgrade execution storage on the original branch",
     )
-    require(
-        probe.returncode in {0, 2},
-        "execution_remote_unavailable",
-        "Cannot inspect the execution remote; no branch was created.",
-    )
-    created = False
-    if probe.returncode == 2:
-        with tempfile.TemporaryDirectory(prefix="wuditask-setup-") as directory:
-            root = Path(directory)
-            coord._run(["git", "init", "-b", branch], cwd=root)
-            ExecutionRepository(root).initialize(
-                actor, "Fresh isolated branch; no legacy records migrated."
-            )
-            coord._run(
-                ["git", "add", "data", "hub.json", "coordination.json"], cwd=root
-            )
-            coord._run(
-                [
-                    "git",
-                    "-c",
-                    f"user.name={actor['login']}",
-                    "-c",
-                    f"user.email={actor['login']}@users.noreply.github.com",
-                    "commit",
-                    "-m",
-                    "Initialize personal execution storage",
-                ],
-                cwd=root,
-            )
-            pushed = coord._push(root)
-            created = pushed.returncode == 0
-            # A concurrent setup or a lost push response is resolved by reading
-            # the branch. Never force the local seed over an existing remote.
-    with coord.snapshot() as repository:
-        inventory = repository.inventory()
-        require(
-            inventory["initialized"],
-            "legacy_branch_selected",
-            "This branch contains legacy data. Use a separate branch; setup does not migrate it.",
-        )
-    return {"branch_created": created, "remote": remote, "branch": branch}
+    return {
+        "branch_created": False,
+        "remote": remote,
+        "branch": branch,
+        "storage": result,
+    }
 
 
 def setup(
@@ -99,28 +56,79 @@ def setup(
         origin.returncode == 0
         and not _same_repository(origin.stdout.strip(), args.remote),
         "invalid_execution_remote",
-        "Use a separate execution repository, not the tool repository.",
+        "Execution storage must differ from the tool repository.",
     )
     with _file_lock(root / "setup.lock"):
-        config_path = root / "config.json"
-        if config_path.exists():
-            config = read_json(config_path)
+        path = root / "config.json"
+        config = read_json(path) if path.exists() else None
+        switching = bool(
+            config
+            and (config["remote"] != args.remote or config["branch"] != args.branch)
+        )
+        if config:
             require(
-                all(
-                    config.get(k) == v
-                    for k, v in {
-                        "actor_id": actor["actor_id"],
-                        "remote": args.remote,
-                        "branch": args.branch,
-                    }.items()
-                ),
-                "coordination_already_configured",
-                "This environment is already bound to another authority/account; do not silently switch it.",
+                config["actor_id"] == actor["actor_id"],
+                "coordination_account_changed",
+                "Upgrade with the configured GitHub account.",
             )
+        if switching:
+            require(
+                args.coord_command == "upgrade"
+                and _same_repository(config["remote"], args.remote),
+                "coordination_already_configured",
+                "Use explicit upgrade within the same repository; do not silently bypass claims.",
+            )
+            if config["branch"] != args.branch:
+                with coordinator(config).snapshot() as source:
+                    source.check_relocation(
+                        {"remote": args.remote, "branch": args.branch}
+                    )
         result = prepare_branch(args.remote, args.branch, actor)
-        result["configuration"] = _configure(args, actor)
+        if switching and config["branch"] != args.branch:
+            result["source_retired"] = coordinator(config).write(
+                lambda repo: repo.retire_empty_branch(
+                    {"remote": args.remote, "branch": args.branch}
+                ),
+                Identity(actor["login"]),
+                lambda _: "Retire empty alternate execution branch",
+            )
+        # Preflight/link reconciliation happens before changing personal authority.
+        # Retrying after a partially completed install is safe.
         result["installation"] = install_agent_access(
             tool_root, hub_remote=args.remote, hub_branch=args.branch
         )
-        result["skill"] = "$wuditask-coordinate"
+        if switching:
+            with _file_lock(root / "config.lock"):
+                require(
+                    read_json(path) == config,
+                    "configuration_changed",
+                    "Local coordination configuration changed during upgrade.",
+                )
+                journal_write(root / "configuration-before-upgrade.json", config)
+                journal_write(
+                    path, {**config, "remote": args.remote, "branch": args.branch}
+                )
+            result["configuration"] = {"configured": True, "changed": True}
+        else:
+            result["configuration"] = _configure(args, actor)
+        result["skill"] = "$wuditask"
         return result
+
+
+def upgrade(
+    args: argparse.Namespace, actor: dict[str, str], tool_root: Path
+) -> dict[str, Any]:
+    installed = Path.home() / ".wuditask/config.json"
+    config = read_json(installed) if installed.exists() else {}
+    remote = args.remote or config.get("hub_remote")
+    branch = args.branch or config.get("hub_branch", "main")
+    # The short-lived separate-branch setup is folded back into the original main.
+    if not args.branch and branch == "personal-execution":
+        branch = "main"
+    require(
+        bool(remote),
+        "execution_remote_required",
+        "Specify the original execution repository with --remote.",
+    )
+    args.remote, args.branch = remote, branch
+    return setup(args, actor, tool_root)

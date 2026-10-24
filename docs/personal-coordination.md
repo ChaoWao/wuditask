@@ -1,6 +1,6 @@
 # 个人跨环境执行协调
 
-**用户通过 `$wuditask-coordinate` 对主 agent 说要做什么，CLI 由 agent 调用。**
+**用户通过 `$wuditask` 对主 agent 说要做什么，CLI 由 agent 调用。**
 GitHub Issue/PR 保存目标、责任、设计、进展和验收；这里记录当前由哪个环境推进。
 不再人工创建 WDT 任务，不自动指派，不用 Hub archive 判定业务完成。
 
@@ -27,26 +27,37 @@ GitHub Issue/PR 保存目标、责任、设计、进展和验收；这里记录�
 摘要；敏感对话、主机细节和私人恢复材料不要写入公共库。凭据放在 SSH agent 或
 Git credential helper，不写 remote URL 或 JSON。
 
-## 一次性安装，无需整理历史任务
+## 统一升级与安装
 
-需要 Python 3.10+、Git、已登录 github.com 的 gh。从工具 clone 运行：
+只保留 `$wuditask` 一个 skill。说“升级”执行升级流程，说“处理这个 Issue”执行
+任务流程；领取、接管和结束不再各装一个 skill。需要 Python 3.10+、Git 和已登录的 gh。
+
+已经安装旧工具仓和旧执行仓的机器：
 
 ```bash
-python3 tools/wuditask.py coord setup \
-  --remote git@github.com:TEAM/EXECUTION.git --branch personal-execution
+python3 TOOL/tools/wuditask.py --json upgrade
 ```
 
-setup 自动创建或校验独立的执行分支、配置本地环境、注册 CLI 和统一 skill：
+旧 CLI 没有 upgrade 命令时，先运行旧 `selfupdate`，再调用更新后的 `coord upgrade`。
+[升级 skill 流程](../.agents/skills/wuditask/references/upgrade.md) 包含缺少配置时的旧 clone 识别方法。
 
-- 同一个仓库里原有 main、旧记录和旧执行不改动。
-- 已存在的 legacy 分支会被拒绝；新用户选择约定的独立分支即可，不必迁移历史。
-- 多环境同时 setup 使用普通 Git push；冲突后读取获胜分支，绝不强推。
-- 每个环境独立配置，不复制 environment ID 或 session journal。
-- 已绑定其他 authority 的环境不会静默改绑，以免绕过已有执行记录。
-- 长期运行的 agent 若缓存 skill 列表，需要刷新/重开会话。
+升级复用原两个仓库和原执行分支（通常 main），不会新建 personal-execution 分支：
 
-团队只需约定一次执行库和分支，主 agent 可代办安装。它不会自行创建新的 GitHub
-仓库。旧入口不接入新分支，因此新旧流程间不承诺防重复；新任务统一用新 skill。
+1. 工具只做干净工作区的快进更新，先验证候选测试；本地修改/分叉不覆盖。
+2. 执行仓在一次普通 Git 提交中转成新格式。旧 open/archive/deletions 和 manifest
+   移入 `data/legacy/`，保留原始内容；原活动记录只是历史，不宣称完成或自动恢复。
+3. 旧客户端下次访问新 manifest 会拒绝继续写；不要求证明旧进程停止。
+4. 已经是新格式的执行仓保持现有 claims 不变，重复升级为幂等操作。
+5. 注册单一 skill、移除本安装管理的旧 skill 链接，并配置本机使用同一个执行分支。
+   不删除无关文件；中途失败明确报错，可修复后重试。
+
+新安装从工具 clone 执行 `coord setup --remote EXECUTION_REMOTE --branch main`。
+使用既有分支；不会另建仓库或分支。各机器分别升级，不复制 environment/session。
+如果旧执行仓 clone 已知且干净，也快进同步它；工作区有修改则保留，协调器直接访问远端。
+长期运行会话若缓存技能目录，需刷新或重开。
+
+临时绑定 personal-execution 的安装可通过 upgrade 回到原 main，但源分支存在
+执行历史时拒绝静默改绑，必须先处理历史转移。普通升级不会自动删除远端分支。
 
 ## 领取、核对、保存进展
 
@@ -111,9 +122,8 @@ operation_id、method=manual-verification、verified_by、evidence、checkpoint�
 writers_stopped=true、pending_operations_reconciled=true；recover 另需 user_authorization。
 它记录人工核验，不独立证明进程死亡。普通用户不需要填它。
 
-只有明确选择把旧存储原地迁移时，才使用 inventory 和
-`init --old-writers-stopped '核验依据'`：活动旧 run 会阻止该迁移，旧记录保持只读，
-新格式阻止旧客户端继续写。新分支 setup 不需要执行这一步。
+旧的严格 `init --old-writers-stopped` 接口保留给显式要求停止核验的存储迁移；
+默认升级用 `upgrade`，无需停止证明。
 
 ## Part 3 接口和验证范围
 
@@ -122,5 +132,5 @@ S2 管理执行身份及条件更新。不同账号互不锁定；同账号不�
 排队、任意副作用 exactly-once 和强制取消进程不在这里处理。
 
 测试使用临时真实 Git 远端覆盖领取/接管竞争、丢响应、旧 run 失效、不同用户独立、
-结束幂等及新分支 setup；GitHub 解析使用受控响应测试。这不等于所有 agent 宿主
+结束幂等、原分支升级、历史保留及旧安装技能清理；GitHub 解析使用受控响应测试。这不等于所有 agent 宿主
 已经实现主动撤销或自动停写。所有环境使用新 skill 后，才属于新流程的协调范围。

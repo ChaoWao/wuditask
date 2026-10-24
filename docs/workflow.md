@@ -1,5 +1,7 @@
 # 分布式协作工作流
 
+> 历史协议说明：本文旧 skill 与队列操作已退役，不再安装。现行统一入口为 `$wuditask`，旧安装请按 [个人协调协议](personal-coordination.md) 升级。以下仅用于解释保留的历史数据。
+
 > 新的个人跨环境流程使用 [coord 协议](personal-coordination.md)。本文仅描述未迁移的存量队列。
 > 本文描述存量 Hub 执行协议。新增的 [GitHub 业务图](github-business-graph.md)
 > 直接读取 GitHub 原生关系，不使用 Hub priority、dependencies 或 archive 解锁。

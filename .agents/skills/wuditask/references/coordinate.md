@@ -1,33 +1,4 @@
----
-name: wuditask-coordinate
-description: Coordinate your work on a GitHub Issue or PR across machines using WudiTask. Use when starting, inspecting, continuing elsewhere, taking over, pausing or finishing a tracked task. Keeps GitHub business ownership separate from the current personal execution; does not replace the task's implementation workflow.
----
-
-# Coordinate a GitHub task
-
-The user gives the task and intent; handle run IDs, session files and CLI calls yourself.
-Use the authenticated GitHub account. Different people can share an execution repository;
-records are independent by stable user ID and GitHub task node ID. This coordinates the
-current designated execution, not arbitrary process writes.
-
-## Find the tool and configure once
-
-Use `wuditask` if registered, or read `~/.wuditask/config.json` for `tool_path` and invoke
-`python3 <tool_path>/tools/wuditask.py`. When using this skill from an uninstalled clone,
-resolve the repository root three levels above this SKILL.md directory.
-
-If `~/.wuditask/personal/config.json` exists, use that authority. Never silently switch it
-because a task is busy. Otherwise use the execution remote/branch already agreed with the
-user or team (an existing install's `hub_remote` can supply the repository). If none is
-known, ask only for the execution repository. All environments of an account must use the
-same branch. Different accounts may share it. Do not create a new repository per person.
-
-Run `coord setup --remote REMOTE --branch personal-execution` for the agreed fresh branch.
-It creates/validates that execution branch, registers this environment and installs skills.
-It leaves old branches and tasks untouched. An existing legacy branch is refused; choose
-an agreed separate execution branch rather than migrating old tasks to get started.
-Do not store credentials in URLs or checkpoint summaries. Shared public storage must not
-contain private conversation, machine details or sensitive checkpoint content.
+# Task coordination
 
 ## Start or inspect
 
@@ -97,5 +68,5 @@ follow the user's existing permissions for Issue/PR updates and never equate it 
 Stop your own new writes after finish. Note any known continuing background work in the checkpoint.
 
 Strict verified handoff (`quiesce/release/recover` with stop evidence) remains optional when
-specifically desired. Read [the protocol](../../../docs/personal-coordination.md) for that
+specifically desired. Read [the protocol](../../../../docs/personal-coordination.md) for that
 path or for storage/migration details; do not impose it on ordinary continuation.

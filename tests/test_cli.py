@@ -954,13 +954,13 @@ class CliTests(unittest.TestCase):
                 self.assertTrue((output / name).is_file(), name)
 
         routes = {
-            "add": "$wuditask-add",
-            "assign": "$wuditask-assign",
-            "check": "$wuditask-check",
-            "execute": "$wuditask-execute",
-            "archive": "$wuditask-archive",
-            "release": "$wuditask-release",
-            "unassign": "$wuditask-unassign",
+            "add": "$wuditask",
+            "assign": "$wuditask",
+            "check": "$wuditask",
+            "execute": "$wuditask",
+            "archive": "$wuditask",
+            "release": "$wuditask",
+            "unassign": "$wuditask",
         }
         for topic, invocation in routes.items():
             with self.subTest(topic=topic):

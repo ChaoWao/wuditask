@@ -38,7 +38,7 @@ def load_config(
             "WudiTask is not installed for this user.",
             details={
                 "config": str(path),
-                "action": "Run the wuditask-install skill with the task Hub remote.",
+                "action": "Use the wuditask skill upgrade workflow with the task Hub remote.",
             },
         ) from exc
     except (json.JSONDecodeError, OSError) as exc:
@@ -64,7 +64,7 @@ def load_config(
             details={
                 "config": str(path),
                 "required_fields": sorted(required),
-                "action": "Run the wuditask-install skill again; legacy hub_path configuration is not supported.",
+                "action": "Use the wuditask skill upgrade workflow again; legacy hub_path configuration is not supported.",
             },
         )
     if value.get("schema_version") != CONFIG_SCHEMA_VERSION:
@@ -75,7 +75,7 @@ def load_config(
                 "config": str(path),
                 "actual": value.get("schema_version"),
                 "expected": CONFIG_SCHEMA_VERSION,
-                "action": "Run the wuditask-install skill again.",
+                "action": "Use the wuditask skill upgrade workflow again.",
             },
         )
     if not is_utc_timestamp(value.get("installed_at")):
@@ -123,7 +123,7 @@ def load_config(
                 details={
                     "registered_tool_path": str(tool_path),
                     "invoked_tool_path": str(expected),
-                    "action": "Invoke the registered tool or run the wuditask-install skill for this clone.",
+                    "action": "Invoke the registered tool or use the wuditask skill upgrade workflow for this clone.",
                 },
             )
 

@@ -27,10 +27,15 @@ def add_parser(commands: Any) -> None:
     sub = parser.add_subparsers(dest="coord_command", required=True)
     setup = sub.add_parser(
         "setup",
-        help="Create/use a separate execution branch and install the unified skill.",
+        help="Upgrade the existing execution branch and install the unified skill.",
     )
     setup.add_argument("--remote", required=True)
-    setup.add_argument("--branch", default="personal-execution")
+    setup.add_argument("--branch", default="main")
+    upgrade = sub.add_parser(
+        "upgrade", help="Upgrade the original configured execution branch in place."
+    )
+    upgrade.add_argument("--remote")
+    upgrade.add_argument("--branch")
     takeover = sub.add_parser(
         "takeover",
         help="Explicitly replace an observed run; no process-stop proof required.",
@@ -341,6 +346,10 @@ def run(args: argparse.Namespace, tool_root: Path | None = None) -> dict[str, An
         from .execution_setup import setup
 
         return setup(args, actor, tool_root or Path(__file__).resolve().parents[1])
+    if args.coord_command == "upgrade":
+        from .execution_setup import upgrade
+
+        return upgrade(args, actor, tool_root or Path(__file__).resolve().parents[1])
     if args.coord_command == "configure":
         return _configure(args, actor)
     config = _load_config(actor)

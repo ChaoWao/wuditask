@@ -9,9 +9,7 @@ from unittest.mock import patch
 
 from wuditask import execution_cli as cli
 from wuditask.cli import _parser, run
-from wuditask.coordination import ExecutionRepository
 from wuditask.errors import WudiTaskError
-from wuditask.execution_setup import prepare_branch
 from wuditask.gitops import GitCoordinator
 from tests import test_personal_coordination as fixtures
 from tests.test_install import make_tool
@@ -136,75 +134,6 @@ class TakeoverTests(unittest.TestCase):
         with self.coord.snapshot() as repo:
             repo.assert_current(new)
 
-    def test_setup_creates_separate_branch_and_preserves_existing_history(self):
-        main = fixtures.git(
-            ["rev-parse", "refs/heads/main"], self.fixture.origin
-        ).stdout.strip()
-        result = prepare_branch(str(self.fixture.origin), "personal", self.actor)
-        self.assertTrue(result["branch_created"])
-        self.assertEqual(
-            main,
-            fixtures.git(
-                ["rev-parse", "refs/heads/main"], self.fixture.origin
-            ).stdout.strip(),
-        )
-        self.assertFalse(
-            prepare_branch(str(self.fixture.origin), "personal", self.actor)[
-                "branch_created"
-            ]
-        )
-        coord = GitCoordinator(
-            remote=str(self.fixture.origin),
-            branch="personal",
-            cache_root=self.base / "new-cache",
-            repository_factory=ExecutionRepository,
-        )
-        with coord.snapshot() as repo:
-            self.assertTrue(repo.inventory()["initialized"])
-
-    def test_setup_never_migrates_existing_legacy_branch(self):
-        seed = self.base / "seed"
-        fixtures.git(["push", "origin", "HEAD:refs/heads/legacy"], seed)
-        before = fixtures.git(
-            ["rev-parse", "refs/heads/legacy"], self.fixture.origin
-        ).stdout.strip()
-        with self.assertRaises(WudiTaskError) as error:
-            prepare_branch(str(self.fixture.origin), "legacy", self.actor)
-        self.assertEqual("legacy_branch_selected", error.exception.code)
-        self.assertEqual(
-            before,
-            fixtures.git(
-                ["rev-parse", "refs/heads/legacy"], self.fixture.origin
-            ).stdout.strip(),
-        )
-
-    def test_concurrent_setup_does_not_overwrite_winning_branch(self):
-        results, errors = [], []
-        barrier = threading.Barrier(2)
-        push = GitCoordinator._push
-
-        def race_push(coord, root):
-            barrier.wait(timeout=10)
-            return push(coord, root)
-
-        def attempt():
-            try:
-                results.append(
-                    prepare_branch(str(self.fixture.origin), "fresh", self.actor)
-                )
-            except Exception as exc:
-                errors.append(exc)
-
-        with patch.object(GitCoordinator, "_push", race_push):
-            threads = [threading.Thread(target=attempt) for _ in range(2)]
-            for thread in threads:
-                thread.start()
-            for thread in threads:
-                thread.join(20)
-                self.assertFalse(thread.is_alive())
-        self.assertEqual([], errors)
-        self.assertEqual(2, len(results))
-
     def test_setup_registers_skill_for_personal_storage(self):
         home = self.base / "home"
         tool = make_tool(
@@ -222,20 +151,16 @@ class TakeoverTests(unittest.TestCase):
                     "--remote",
                     str(self.fixture.origin),
                     "--branch",
-                    "installed",
+                    "main",
                 ]
             )
             result = run(args, tool)
-            self.assertEqual("$wuditask-coordinate", result["skill"])
+            self.assertEqual("$wuditask", result["skill"])
             self.assertEqual(
                 "personal-execution", result["installation"]["hub_validation"]["mode"]
             )
-            self.assertTrue(
-                (home / ".agents/skills/wuditask-coordinate/SKILL.md").is_file()
-            )
-            self.assertTrue(
-                (home / ".claude/skills/wuditask-coordinate/SKILL.md").is_file()
-            )
+            self.assertTrue((home / ".agents/skills/wuditask/SKILL.md").is_file())
+            self.assertTrue((home / ".claude/skills/wuditask/SKILL.md").is_file())
             self.assertTrue((home / ".wuditask/personal/config.json").is_file())
             self.assertFalse(run(args, tool)["branch_created"])
 

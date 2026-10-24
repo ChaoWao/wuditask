@@ -1,0 +1,4 @@
+interface:
+  display_name: "WudiTask"
+  short_description: "Upgrade and coordinate GitHub work across machines"
+  default_prompt: "Use $wuditask to upgrade or coordinate my GitHub task."

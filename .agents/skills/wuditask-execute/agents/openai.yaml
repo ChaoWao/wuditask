@@ -1,4 +1,0 @@
-interface:
-  display_name: "Execute WudiTask"
-  short_description: "Start a ready owner agent run safely"
-  default_prompt: "Use $wuditask-execute to start an authorized agent run on a ready task."

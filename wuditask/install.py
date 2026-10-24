@@ -13,21 +13,7 @@ from .util import atomic_write_json, repo_from_remote, utc_now
 from .validation import validate_repository
 
 
-REQUIRED_SKILL_NAMES = {
-    "wuditask-add",
-    "wuditask-archive",
-    "wuditask-assign",
-    "wuditask-check",
-    "wuditask-coordinate",
-    "wuditask-delete",
-    "wuditask-execute",
-    "wuditask-install",
-    "wuditask-list",
-    "wuditask-release",
-    "wuditask-selfupdate",
-    "wuditask-show",
-    "wuditask-unassign",
-}
+REQUIRED_SKILL_NAMES = {"wuditask"}
 
 
 def _git_value(root: Path, *arguments: str) -> str | None:
